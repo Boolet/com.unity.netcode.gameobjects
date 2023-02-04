@@ -7,11 +7,12 @@ namespace Unity.Netcode.Components
     /// mode of the rigidbody and disabling it on all peers but the authoritative one.
     /// </summary>
     [RequireComponent(typeof(Rigidbody))]
-    [RequireComponent(typeof(NetworkTransform))]
-    public class NetworkRigidbody : NetworkBehaviour
+    //[RequireComponent(typeof(NetworkTransform))]
+    public class NetworkRigidbody : NetworkTransform
     {
+        public bool RunOnFixedUpdate = true;
+
         private Rigidbody m_Rigidbody;
-        private NetworkTransform m_NetworkTransform;
 
         private bool m_OriginalKinematic;
         private RigidbodyInterpolation m_OriginalInterpolation;
@@ -22,22 +23,48 @@ namespace Unity.Netcode.Components
         /// <summary>
         /// Gets a bool value indicating whether this <see cref="NetworkRigidbody"/> on this peer currently holds authority.
         /// </summary>
-        private bool HasAuthority => m_NetworkTransform.CanCommitToTransform;
+        private bool HasAuthority => CanCommitToTransform;
 
-        private void Awake()
+        protected override bool m_AutoUpdateTransform => !RunOnFixedUpdate;
+
+        private new void Awake()
         {
+            base.Awake();
             m_Rigidbody = GetComponent<Rigidbody>();
-            m_NetworkTransform = GetComponent<NetworkTransform>();
         }
 
         private void FixedUpdate()
         {
-            if (NetworkManager.IsListening)
-            {
-                if (HasAuthority != m_IsAuthority)
-                {
+            if (!IsSpawned) {
+                return;
+            }
+
+            if (NetworkManager.IsListening) {
+                if (HasAuthority != m_IsAuthority) {
                     m_IsAuthority = HasAuthority;
                     UpdateRigidbodyKinematicMode();
+                }
+            }
+
+            // apply interpolated value
+            if (!m_AutoUpdateTransform && (m_CachedNetworkManager.IsConnectedClient || m_CachedNetworkManager.IsListening)) {
+                // eventually, we could hoist this calculation so that it happens once for all objects, not once per object
+                //var cachedDeltaTime = Time.deltaTime;
+                //var serverTime = NetworkManager.ServerTime;
+                //var cachedServerTime = serverTime.Time;
+                //var cachedRenderTime = serverTime.TimeTicksAgo(1).Time;
+
+                //if (Interpolate) {
+                //    foreach (var interpolator in m_AllFloatInterpolators) {
+                //        interpolator.Update(cachedDeltaTime, cachedRenderTime, cachedServerTime);
+                //    }
+
+                //    m_RotationInterpolator.Update(cachedDeltaTime, cachedRenderTime, cachedServerTime);
+                //}
+
+                if (!CanCommitToTransform) {
+                    // Apply updated interpolated value
+                    ApplyToTransform();
                 }
             }
         }
@@ -57,6 +84,7 @@ namespace Unity.Netcode.Components
             else
             {
                 // Resets the rigidbody back to it's non replication only state. Happens on shutdown and when authority is lost
+                //Debug.Log("m_OriginalKinematic value: " + m_OriginalKinematic);
                 m_Rigidbody.isKinematic = m_OriginalKinematic;
                 m_Rigidbody.interpolation = m_OriginalInterpolation;
             }
@@ -65,6 +93,7 @@ namespace Unity.Netcode.Components
         /// <inheritdoc />
         public override void OnNetworkSpawn()
         {
+            base.OnNetworkSpawn();
             m_IsAuthority = HasAuthority;
             m_OriginalKinematic = m_Rigidbody.isKinematic;
             m_OriginalInterpolation = m_Rigidbody.interpolation;
@@ -72,8 +101,9 @@ namespace Unity.Netcode.Components
         }
 
         /// <inheritdoc />
-        public override void OnNetworkDespawn()
+        new public void OnNetworkDespawn()
         {
+            base.OnNetworkDespawn();
             UpdateRigidbodyKinematicMode();
         }
     }

@@ -12,7 +12,7 @@ namespace Unity.Netcode.Components
     /// </summary>
     [DisallowMultipleComponent]
     [AddComponentMenu("Netcode/" + nameof(NetworkTransform))]
-    [DefaultExecutionOrder(100000)] // this is needed to catch the update time after the transform was updated by user scripts
+    [DefaultExecutionOrder(10000)] // this is needed to catch the update time after the transform was updated by user scripts
     public class NetworkTransform : NetworkBehaviour
     {
         public const float PositionThresholdDefault = .001f;
@@ -272,6 +272,7 @@ namespace Unity.Netcode.Components
         /// </summary>
         // This is public to make sure that users don't depend on this IsClient && IsOwner check in their code. If this logic changes in the future, we can make it invisible here
         public bool CanCommitToTransform;
+        protected virtual bool m_AutoUpdateTransform => true;
         protected bool m_CachedIsServer;
         protected NetworkManager m_CachedNetworkManager;
 
@@ -678,7 +679,7 @@ namespace Unity.Netcode.Components
             }
         }
 
-        private void Awake()
+        protected void Awake()
         {
             // we only want to create our interpolators during Awake so that, when pooled, we do not create tons
             //  of gc thrash each time objects wink out and are re-used
@@ -891,13 +892,21 @@ namespace Unity.Netcode.Components
                         }
                     }
 #endif
-
-                    // Apply updated interpolated value
-                    ApplyInterpolatedNetworkStateToTransform(m_ReplicatedNetworkState.Value, m_Transform);
+                    if (m_AutoUpdateTransform)
+                    {
+                        // Apply updated interpolated value
+                        ApplyToTransform();
+                    }
                 }
             }
 
             m_LocalAuthoritativeNetworkState.IsTeleportingNextFrame = false;
+        }
+
+        // Apply updated interpolated value
+        protected void ApplyToTransform()
+        {
+            ApplyInterpolatedNetworkStateToTransform(m_ReplicatedNetworkState.Value, m_Transform);
         }
 
         /// <summary>

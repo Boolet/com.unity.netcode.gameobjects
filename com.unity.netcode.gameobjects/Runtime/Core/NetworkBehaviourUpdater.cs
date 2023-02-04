@@ -24,7 +24,8 @@ namespace Unity.Netcode
                     for (int i = 0; i < networkManager.ConnectedClientsList.Count; i++)
                     {
                         var client = networkManager.ConnectedClientsList[i];
-                        var spawnedObjs = networkManager.SpawnManager.SpawnedObjectsList;
+                        //var spawnedObjs = networkManager.SpawnManager.SpawnedObjectsList;
+                        var spawnedObjs = DirtyTracker.DirtyObjects;
                         m_Touched.UnionWith(spawnedObjs);
                         foreach (var sobj in spawnedObjs)
                         {
@@ -50,8 +51,11 @@ namespace Unity.Netcode
                 }
                 else
                 {
+                    m_Touched.Clear();
+                    m_Touched.UnionWith(DirtyTracker.DirtyObjects);
                     // when client updates the server, it tells it about all its objects
-                    foreach (var sobj in networkManager.SpawnManager.SpawnedObjectsList)
+                    //foreach (var sobj in networkManager.SpawnManager.SpawnedObjectsList)
+                    foreach (var sobj in DirtyTracker.DirtyObjects)
                     {
                         if (sobj.IsOwner)
                         {
@@ -63,7 +67,8 @@ namespace Unity.Netcode
                     }
 
                     // Now, reset all the no-longer-dirty variables
-                    foreach (var sobj in networkManager.SpawnManager.SpawnedObjectsList)
+                    //foreach (var sobj in networkManager.SpawnManager.SpawnedObjectsList)
+                    foreach (var sobj in m_Touched)
                     {
                         for (int k = 0; k < sobj.ChildNetworkBehaviours.Count; k++)
                         {

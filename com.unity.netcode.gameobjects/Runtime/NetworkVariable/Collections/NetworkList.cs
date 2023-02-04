@@ -329,6 +329,12 @@ namespace Unity.Netcode
                         {
                             ReadField(reader);
                             ResetDirty();
+
+                            if (OnListChanged != null) {
+                                OnListChanged(new NetworkListEvent<T> {
+                                    Type = eventType,
+                                });
+                            }
                         }
                         break;
                 }

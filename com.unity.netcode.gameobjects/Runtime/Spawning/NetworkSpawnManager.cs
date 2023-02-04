@@ -108,7 +108,7 @@ namespace Unity.Netcode
             {
                 m_Triggers[networkObjectId] = new TriggerInfo
                 {
-                    Expiry = Time.realtimeSinceStartup + 1,
+                    Expiry = Time.realtimeSinceStartup + 10,
                     TriggerData = new NativeList<TriggerData>(Allocator.Persistent)
                 };
             }
@@ -511,6 +511,9 @@ namespace Unity.Netcode
 
             networkObject.InvokeBehaviourNetworkSpawn();
 
+            //Inform orphan-like behaviors here! TODO: Verify this works, or if it should be done earlier/later
+            AwaitSpawnHelper.ObjectSpawned(networkObject);
+
             // This must happen after InvokeBehaviourNetworkSpawn, otherwise ClientRPCs and other messages can be
             // processed before the object is fully spawned. This must be the last thing done in the spawn process.
             if (m_Triggers.ContainsKey(networkId))
@@ -810,6 +813,7 @@ namespace Unity.Netcode
 
             if (SpawnedObjects.Remove(networkObject.NetworkObjectId))
             {
+                DirtyTracker.Remove(networkObject);
                 SpawnedObjectsList.Remove(networkObject);
             }
 

@@ -41,6 +41,8 @@ namespace Unity.Netcode
         }
 #endif // UNITY_EDITOR
 
+        #region Properties and Variables
+
         /// <summary>
         /// Gets the NetworkManager that owns this NetworkObject instance
         /// </summary>
@@ -167,6 +169,8 @@ namespace Unity.Netcode
 
         internal readonly HashSet<ulong> Observers = new HashSet<ulong>();
 
+        #endregion
+
 #if MULTIPLAYER_TOOLS
         private string m_CachedNameForMetrics;
 #endif
@@ -178,6 +182,8 @@ namespace Unity.Netcode
             return null;
 #endif
         }
+
+        #region Spawning, Visibility and Destruction
 
         /// <summary>
         /// Returns Observers enumerator
@@ -569,6 +575,10 @@ namespace Unity.Netcode
             }
         }
 
+        #endregion
+
+        #region Parenting
+
         private bool m_IsReparented; // Did initial parent (came from the scene hierarchy) change at runtime?
         private ulong? m_LatestParent; // What is our last set parent NetworkObject's ID?
         private Transform m_CachedParent; // What is our last set parent Transform reference?
@@ -632,6 +642,7 @@ namespace Unity.Netcode
             return true;
         }
 
+        //Monobehavior event when parentage changes
         private void OnTransformParentChanged()
         {
             if (!AutoObjectParentSync)
@@ -791,6 +802,10 @@ namespace Unity.Netcode
             }
         }
 
+        #endregion
+
+        #region Managed NetworkBehaviors and NetworkVariables
+
         internal void InvokeBehaviourNetworkSpawn()
         {
             for (int i = 0; i < ChildNetworkBehaviours.Count; i++)
@@ -904,6 +919,10 @@ namespace Unity.Netcode
 
             return ChildNetworkBehaviours[index];
         }
+
+        #endregion
+
+        #region Serialization
 
         internal struct SceneObject
         {
@@ -1150,5 +1169,8 @@ namespace Unity.Netcode
 
             return GlobalObjectIdHash;
         }
+
+        #endregion
     }
+
 }

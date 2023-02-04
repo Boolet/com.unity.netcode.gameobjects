@@ -12,6 +12,7 @@ namespace Unity.Netcode
     /// </summary>
     public abstract class NetworkBehaviour : MonoBehaviour
     {
+        #region RPC Facilitation
 #pragma warning disable IDE1006 // disable naming rule violation check
         // RuntimeAccessModifiersILPP will make this `protected`
         internal enum __RpcExecStage
@@ -229,6 +230,10 @@ namespace Unity.Netcode
 #endif
         }
 
+        #endregion
+
+        #region Properties
+
         /// <summary>
         /// Gets the NetworkManager that owns this NetworkBehaviour instance
         ///   See note around `NetworkObject` for how there is a chicken / egg problem when we are not initialized
@@ -323,6 +328,7 @@ namespace Unity.Netcode
         /// </summary>
         public bool HasNetworkObject => NetworkObject != null;
 
+        [SerializeField]
         private NetworkObject m_NetworkObject = null;
 
         /// <summary>
@@ -354,6 +360,10 @@ namespace Unity.Netcode
         /// Gets the ClientId that owns the NetworkObject
         /// </summary>
         public ulong OwnerClientId => NetworkObject.OwnerClientId;
+
+        #endregion
+
+        #region Events
 
         /// <summary>
         /// Gets called when the <see cref="NetworkObject"/> gets spawned, message handlers are ready to be registered and the network is setup.
@@ -389,6 +399,10 @@ namespace Unity.Netcode
         /// Gets called when the parent NetworkObject of this NetworkBehaviour's NetworkObject has changed
         /// </summary>
         public virtual void OnNetworkObjectParentChanged(NetworkObject parentNetworkObject) { }
+
+        #endregion
+
+        #region NetworkVariable Management
 
         private bool m_VarInit = false;
 
@@ -670,6 +684,8 @@ namespace Unity.Netcode
                 }
             }
         }
+
+        #endregion
 
         /// <summary>
         /// Gets the local instance of a object with a given NetworkId

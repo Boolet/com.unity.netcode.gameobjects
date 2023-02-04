@@ -12,6 +12,9 @@ namespace Unity.Netcode
         private NetworkObjectReference m_NetworkObjectReference;
         private ushort m_NetworkBehaviourId;
 
+        public ulong NetworkObjectId => m_NetworkObjectReference.NetworkObjectId;
+        public ushort NetworkBehaviorId => m_NetworkBehaviourId;
+
         /// <summary>
         /// Creates a new instance of the <see cref="NetworkBehaviourReference{T}"/> struct.
         /// </summary>

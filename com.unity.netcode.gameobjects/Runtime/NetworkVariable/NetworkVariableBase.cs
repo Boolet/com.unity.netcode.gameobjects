@@ -24,7 +24,16 @@ namespace Unity.Netcode
             ReadPerm = readPermIn;
         }
 
-        private protected bool m_IsDirty;
+        private bool m_IsDirty = false;
+        private protected bool p_IsDirty {
+            get { return m_IsDirty; }
+            set {
+                m_IsDirty = value;
+                if (m_NetworkBehaviour != null && m_NetworkBehaviour.IsSpawned) {
+                    DirtyTracker.MarkDirty(m_NetworkBehaviour, value);
+                }
+            }
+        }
 
         /// <summary>
         /// Gets or sets the name of the network variable's instance
@@ -42,7 +51,7 @@ namespace Unity.Netcode
         /// </summary>
         public virtual void SetDirty(bool isDirty)
         {
-            m_IsDirty = isDirty;
+            p_IsDirty = isDirty;
         }
 
         /// <summary>
@@ -50,7 +59,7 @@ namespace Unity.Netcode
         /// </summary>
         public virtual void ResetDirty()
         {
-            m_IsDirty = false;
+            p_IsDirty = false;
         }
 
         /// <summary>
@@ -59,7 +68,7 @@ namespace Unity.Netcode
         /// <returns>Whether or not the container is dirty</returns>
         public virtual bool IsDirty()
         {
-            return m_IsDirty;
+            return p_IsDirty;
         }
 
         public virtual bool ShouldWrite(ulong clientId, bool isServer)
