@@ -1,5 +1,9 @@
 fileFormatVersion: 2
+<<<<<<<< HEAD:com.unity.netcode.gameobjects.meta
 guid: b4042532b811440c599c2a53e7810291
+========
+guid: e9af0202c9057c944b67aad6e4cdac96
+>>>>>>>> develop:com.unity.netcode.gameobjects/TestHelpers/Runtime.meta
 folderAsset: yes
 DefaultImporter:
   externalObjects: {}

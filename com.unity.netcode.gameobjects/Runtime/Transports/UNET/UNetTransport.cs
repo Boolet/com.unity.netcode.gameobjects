@@ -7,6 +7,7 @@ using UnityEngine.Networking;
 
 namespace Unity.Netcode.Transports.UNET
 {
+    [AddComponentMenu("Netcode/UNet Transport")]
     public class UNetTransport : NetworkTransport
     {
         public enum SendMode
@@ -205,8 +206,8 @@ namespace Unity.Netcode.Transports.UNET
         public override bool StartServer()
         {
             var topology = new HostTopology(GetConfig(), MaxConnections);
-            UnityEngine.Networking.NetworkTransport.AddHost(topology, ServerListenPort, null);
-            return true;
+            // Undocumented, but AddHost returns -1 in case of any type of failure. See UNET::NetLibraryManager::AddHost
+            return -1 != UnityEngine.Networking.NetworkTransport.AddHost(topology, ServerListenPort, null);
         }
 
         public override void DisconnectRemoteClient(ulong clientId)

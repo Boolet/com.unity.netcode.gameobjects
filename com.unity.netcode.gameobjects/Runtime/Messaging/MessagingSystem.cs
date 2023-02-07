@@ -8,6 +8,11 @@ using UnityEngine;
 
 namespace Unity.Netcode
 {
+    internal class HandlerNotRegisteredException : SystemException
+    {
+        public HandlerNotRegisteredException() { }
+        public HandlerNotRegisteredException(string issue) : base(issue) { }
+    }
 
     internal class InvalidMessageStructureException : SystemException
     {
@@ -41,14 +46,21 @@ namespace Unity.Netcode
         }
 
         internal delegate void MessageHandler(FastBufferReader reader, ref NetworkContext context, MessagingSystem system);
+        internal delegate int VersionGetter();
 
         private NativeList<ReceiveQueueItem> m_IncomingMessageQueue = new NativeList<ReceiveQueueItem>(16, Allocator.Persistent);
 
-        private MessageHandler[] m_MessageHandlers = new MessageHandler[255];
-        private Type[] m_ReverseTypeMap = new Type[255];
+        // These array will grow as we need more message handlers. 4 is just a starting size.
+        private MessageHandler[] m_MessageHandlers = new MessageHandler[4];
+        private Type[] m_ReverseTypeMap = new Type[4];
 
         private Dictionary<Type, uint> m_MessageTypes = new Dictionary<Type, uint>();
         private Dictionary<ulong, NativeList<SendQueueItem>> m_SendQueues = new Dictionary<ulong, NativeList<SendQueueItem>>();
+
+        // This is m_PerClientMessageVersion[clientId][messageType] = version
+        private Dictionary<ulong, Dictionary<Type, int>> m_PerClientMessageVersions = new Dictionary<ulong, Dictionary<Type, int>>();
+        private Dictionary<uint, Type> m_MessagesByHash = new Dictionary<uint, Type>();
+        private Dictionary<Type, int> m_LocalVersions = new Dictionary<Type, int>();
 
         private List<INetworkHooks> m_Hooks = new List<INetworkHooks>();
 
@@ -59,6 +71,7 @@ namespace Unity.Netcode
 
         internal Type[] MessageTypes => m_ReverseTypeMap;
         internal MessageHandler[] MessageHandlers => m_MessageHandlers;
+
         internal uint MessageHandlerCount => m_HighMessageType;
 
         internal uint GetMessageType(Type t)
@@ -73,6 +86,34 @@ namespace Unity.Netcode
         {
             public Type MessageType;
             public MessageHandler Handler;
+            public VersionGetter GetVersion;
+        }
+
+        internal List<MessageWithHandler> PrioritizeMessageOrder(List<MessageWithHandler> allowedTypes)
+        {
+            var prioritizedTypes = new List<MessageWithHandler>();
+
+            // first pass puts the priority message in the first indices
+            // Those are the messages that must be delivered in order to allow re-ordering the others later
+            foreach (var t in allowedTypes)
+            {
+                if (t.MessageType.FullName == typeof(ConnectionRequestMessage).FullName ||
+                    t.MessageType.FullName == typeof(ConnectionApprovedMessage).FullName)
+                {
+                    prioritizedTypes.Add(t);
+                }
+            }
+
+            foreach (var t in allowedTypes)
+            {
+                if (t.MessageType.FullName != typeof(ConnectionRequestMessage).FullName &&
+                    t.MessageType.FullName != typeof(ConnectionApprovedMessage).FullName)
+                {
+                    prioritizedTypes.Add(t);
+                }
+            }
+
+            return prioritizedTypes;
         }
 
         public MessagingSystem(IMessageSender messageSender, object owner, IMessageProvider provider = null)
@@ -89,6 +130,7 @@ namespace Unity.Netcode
                 var allowedTypes = provider.GetMessages();
 
                 allowedTypes.Sort((a, b) => string.CompareOrdinal(a.MessageType.FullName, b.MessageType.FullName));
+                allowedTypes = PrioritizeMessageOrder(allowedTypes);
                 foreach (var type in allowedTypes)
                 {
                     RegisterMessageType(type);
@@ -136,11 +178,30 @@ namespace Unity.Netcode
             m_Hooks.Add(hooks);
         }
 
+        public void Unhook(INetworkHooks hooks)
+        {
+            m_Hooks.Remove(hooks);
+        }
+
         private void RegisterMessageType(MessageWithHandler messageWithHandler)
         {
+            // if we are out of space, perform amortized linear growth
+            if (m_HighMessageType == m_MessageHandlers.Length)
+            {
+                Array.Resize(ref m_MessageHandlers, 2 * m_MessageHandlers.Length);
+                Array.Resize(ref m_ReverseTypeMap, 2 * m_ReverseTypeMap.Length);
+            }
+
             m_MessageHandlers[m_HighMessageType] = messageWithHandler.Handler;
             m_ReverseTypeMap[m_HighMessageType] = messageWithHandler.MessageType;
+            m_MessagesByHash[XXHash.Hash32(messageWithHandler.MessageType.FullName)] = messageWithHandler.MessageType;
             m_MessageTypes[messageWithHandler.MessageType] = m_HighMessageType++;
+            m_LocalVersions[messageWithHandler.MessageType] = messageWithHandler.GetVersion();
+        }
+
+        public int GetLocalVersion(Type messageType)
+        {
+            return m_LocalVersions[messageType];
         }
 
         internal void HandleIncomingData(ulong clientId, ArraySegment<byte> data, float receiveTime)
@@ -208,17 +269,66 @@ namespace Unity.Netcode
             }
         }
 
-        private bool CanReceive(ulong clientId, Type messageType)
+        private bool CanReceive(ulong clientId, Type messageType, FastBufferReader messageContent, ref NetworkContext context)
         {
             for (var hookIdx = 0; hookIdx < m_Hooks.Count; ++hookIdx)
             {
-                if (!m_Hooks[hookIdx].OnVerifyCanReceive(clientId, messageType))
+                if (!m_Hooks[hookIdx].OnVerifyCanReceive(clientId, messageType, messageContent, ref context))
                 {
                     return false;
                 }
             }
 
             return true;
+        }
+
+        internal Type GetMessageForHash(uint messageHash)
+        {
+            if (!m_MessagesByHash.ContainsKey(messageHash))
+            {
+                return null;
+            }
+            return m_MessagesByHash[messageHash];
+        }
+
+        internal void SetVersion(ulong clientId, uint messageHash, int version)
+        {
+            if (!m_MessagesByHash.ContainsKey(messageHash))
+            {
+                return;
+            }
+            var messageType = m_MessagesByHash[messageHash];
+
+            if (!m_PerClientMessageVersions.ContainsKey(clientId))
+            {
+                m_PerClientMessageVersions[clientId] = new Dictionary<Type, int>();
+            }
+
+            m_PerClientMessageVersions[clientId][messageType] = version;
+        }
+
+        internal void SetServerMessageOrder(NativeArray<uint> messagesInIdOrder)
+        {
+            var oldHandlers = m_MessageHandlers;
+            var oldTypes = m_MessageTypes;
+            m_ReverseTypeMap = new Type[messagesInIdOrder.Length];
+            m_MessageHandlers = new MessageHandler[messagesInIdOrder.Length];
+            m_MessageTypes = new Dictionary<Type, uint>();
+
+            for (var i = 0; i < messagesInIdOrder.Length; ++i)
+            {
+                if (!m_MessagesByHash.ContainsKey(messagesInIdOrder[i]))
+                {
+                    continue;
+                }
+                var messageType = m_MessagesByHash[messagesInIdOrder[i]];
+                var oldId = oldTypes[messageType];
+                var handler = oldHandlers[oldId];
+                var newId = (uint)i;
+                m_MessageTypes[messageType] = newId;
+                m_MessageHandlers[newId] = handler;
+                m_ReverseTypeMap[newId] = messageType;
+            }
         }
 
         public void HandleMessage(in MessageHeader header, FastBufferReader reader, ulong senderId, float timestamp, int serializedHeaderSize)
@@ -240,7 +350,7 @@ namespace Unity.Netcode
             };
 
             var type = m_ReverseTypeMap[header.MessageType];
-            if (!CanReceive(senderId, type))
+            if (!CanReceive(senderId, type, reader, ref context))
             {
                 reader.Dispose();
                 return;
@@ -254,18 +364,29 @@ namespace Unity.Netcode
             var handler = m_MessageHandlers[header.MessageType];
             using (reader)
             {
-                // No user-land message handler exceptions should escape the receive loop.
-                // If an exception is throw, the message is ignored.
-                // Example use case: A bad message is received that can't be deserialized and throws
-                // an OverflowException because it specifies a length greater than the number of bytes in it
-                // for some dynamic-length value.
-                try
+                // This will also log an exception is if the server knows about a message type the client doesn't know
+                // about. In this case the handler will be null. It is still an issue the user must deal with: If the
+                // two connecting builds know about different messages, the server should not send a message to a client
+                // that doesn't know about it
+                if (handler == null)
                 {
-                    handler.Invoke(reader, ref context, this);
+                    Debug.LogException(new HandlerNotRegisteredException(header.MessageType.ToString()));
                 }
-                catch (Exception e)
+                else
                 {
-                    Debug.LogException(e);
+                    // No user-land message handler exceptions should escape the receive loop.
+                    // If an exception is throw, the message is ignored.
+                    // Example use case: A bad message is received that can't be deserialized and throws
+                    // an OverflowException because it specifies a length greater than the number of bytes in it
+                    // for some dynamic-length value.
+                    try
+                    {
+                        handler.Invoke(reader, ref context, this);
+                    }
+                    catch (Exception e)
+                    {
+                        Debug.LogException(e);
+                    }
                 }
             }
             for (var hookIdx = 0; hookIdx < m_Hooks.Count; ++hookIdx)
@@ -309,7 +430,7 @@ namespace Unity.Netcode
             m_SendQueues.Remove(clientId);
         }
 
-        private unsafe void CleanupDisconnectedClient(ulong clientId)
+        private void CleanupDisconnectedClient(ulong clientId)
         {
             var queue = m_SendQueues[clientId];
             for (var i = 0; i < queue.Length; ++i)
@@ -320,10 +441,67 @@ namespace Unity.Netcode
             queue.Dispose();
         }
 
+        internal void CleanupDisconnectedClients()
+        {
+            var removeList = new NativeList<ulong>(Allocator.Temp);
+            foreach (var clientId in m_PerClientMessageVersions.Keys)
+            {
+                if (!m_SendQueues.ContainsKey(clientId))
+                {
+                    removeList.Add(clientId);
+                }
+            }
+
+            foreach (var clientId in removeList)
+            {
+                m_PerClientMessageVersions.Remove(clientId);
+            }
+        }
+
+        public static int CreateMessageAndGetVersion<T>() where T : INetworkMessage, new()
+        {
+            return new T().Version;
+        }
+
+        internal int GetMessageVersion(Type type, ulong clientId, bool forReceive = false)
+        {
+            if (!m_PerClientMessageVersions.TryGetValue(clientId, out var versionMap))
+            {
+                if (forReceive)
+                {
+                    Debug.LogWarning($"Trying to receive {type.Name} from client {clientId} which is not in a connected state.");
+
+                }
+                else
+                {
+                    Debug.LogWarning($"Trying to send {type.Name} to client {clientId} which is not in a connected state.");
+                }
+                return -1;
+            }
+            if (!versionMap.TryGetValue(type, out var messageVersion))
+            {
+                return -1;
+            }
+
+            return messageVersion;
+        }
+
         public static void ReceiveMessage<T>(FastBufferReader reader, ref NetworkContext context, MessagingSystem system) where T : INetworkMessage, new()
         {
             var message = new T();
-            if (message.Deserialize(reader, ref context))
+            var messageVersion = 0;
+            // Special cases because these are the messages that carry the version info - thus the version info isn't
+            // populated yet when we get these. The first part of these messages always has to be the version data
+            // and can't change.
+            if (typeof(T) != typeof(ConnectionRequestMessage) && typeof(T) != typeof(ConnectionApprovedMessage) && typeof(T) != typeof(DisconnectReasonMessage))
+            {
+                messageVersion = system.GetMessageVersion(typeof(T), context.SenderId, true);
+                if (messageVersion < 0)
+                {
+                    return;
+                }
+            }
+            if (message.Deserialize(reader, ref context, messageVersion))
             {
                 for (var hookIdx = 0; hookIdx < system.m_Hooks.Count; ++hookIdx)
                 {
@@ -361,16 +539,47 @@ namespace Unity.Netcode
                 return 0;
             }
 
-            var maxSize = delivery == NetworkDelivery.ReliableFragmentedSequenced ? FRAGMENTED_MESSAGE_MAX_SIZE : NON_FRAGMENTED_MESSAGE_MAX_SIZE;
+            var largestSerializedSize = 0;
+            var sentMessageVersions = new NativeHashSet<int>(clientIds.Count, Allocator.Temp);
+            for (var i = 0; i < clientIds.Count; ++i)
+            {
+                var messageVersion = 0;
+                // Special case because this is the message that carries the version info - thus the version info isn't
+                // populated yet when we get this. The first part of this message always has to be the version data
+                // and can't change.
+                if (typeof(TMessageType) != typeof(ConnectionRequestMessage))
+                {
+                    messageVersion = GetMessageVersion(typeof(TMessageType), clientIds[i]);
+                    if (messageVersion < 0)
+                    {
+                        // Client doesn't know this message exists, don't send it at all.
+                        continue;
+                    }
+                }
 
-            using var tmpSerializer = new FastBufferWriter(NON_FRAGMENTED_MESSAGE_MAX_SIZE - FastBufferWriter.GetWriteSize<MessageHeader>(), Allocator.Temp, maxSize - FastBufferWriter.GetWriteSize<MessageHeader>());
+                if (sentMessageVersions.Contains(messageVersion))
+                {
+                    continue;
+                }
 
-            message.Serialize(tmpSerializer);
+                sentMessageVersions.Add(messageVersion);
 
-            return SendPreSerializedMessage(tmpSerializer, maxSize, ref message, delivery, clientIds);
+                var maxSize = delivery == NetworkDelivery.ReliableFragmentedSequenced ? FRAGMENTED_MESSAGE_MAX_SIZE : NON_FRAGMENTED_MESSAGE_MAX_SIZE;
+
+                using var tmpSerializer = new FastBufferWriter(NON_FRAGMENTED_MESSAGE_MAX_SIZE - FastBufferWriter.GetWriteSize<MessageHeader>(), Allocator.Temp, maxSize - FastBufferWriter.GetWriteSize<MessageHeader>());
+
+                message.Serialize(tmpSerializer, messageVersion);
+
+                var size = SendPreSerializedMessage(tmpSerializer, maxSize, ref message, delivery, clientIds, messageVersion);
+                largestSerializedSize = size > largestSerializedSize ? size : largestSerializedSize;
+            }
+
+            sentMessageVersions.Dispose();
+
+            return largestSerializedSize;
         }
 
-        internal unsafe int SendPreSerializedMessage<TMessageType>(in FastBufferWriter tmpSerializer, int maxSize, ref TMessageType message, NetworkDelivery delivery, in IReadOnlyList<ulong> clientIds)
+        internal unsafe int SendPreSerializedMessage<TMessageType>(in FastBufferWriter tmpSerializer, int maxSize, ref TMessageType message, NetworkDelivery delivery, in IReadOnlyList<ulong> clientIds, int messageVersionFilter)
             where TMessageType : INetworkMessage
         {
             using var headerSerializer = new FastBufferWriter(FastBufferWriter.GetWriteSize<MessageHeader>(), Allocator.Temp);
@@ -385,6 +594,25 @@ namespace Unity.Netcode
 
             for (var i = 0; i < clientIds.Count; ++i)
             {
+                var messageVersion = 0;
+                // Special case because this is the message that carries the version info - thus the version info isn't
+                // populated yet when we get this. The first part of this message always has to be the version data
+                // and can't change.
+                if (typeof(TMessageType) != typeof(ConnectionRequestMessage))
+                {
+                    messageVersion = GetMessageVersion(typeof(TMessageType), clientIds[i]);
+                    if (messageVersion < 0)
+                    {
+                        // Client doesn't know this message exists, don't send it at all.
+                        continue;
+                    }
+
+                    if (messageVersion != messageVersionFilter)
+                    {
+                        continue;
+                    }
+                }
+
                 var clientId = clientIds[i];
 
                 if (!CanSend(clientId, typeof(TMessageType), delivery))
@@ -435,8 +663,22 @@ namespace Unity.Netcode
         internal unsafe int SendPreSerializedMessage<TMessageType>(in FastBufferWriter tmpSerializer, int maxSize, ref TMessageType message, NetworkDelivery delivery, ulong clientId)
             where TMessageType : INetworkMessage
         {
+            var messageVersion = 0;
+            // Special case because this is the message that carries the version info - thus the version info isn't
+            // populated yet when we get this. The first part of this message always has to be the version data
+            // and can't change.
+            if (typeof(TMessageType) != typeof(ConnectionRequestMessage))
+            {
+                messageVersion = GetMessageVersion(typeof(TMessageType), clientId);
+                if (messageVersion < 0)
+                {
+                    // Client doesn't know this message exists, don't send it at all.
+                    return 0;
+                }
+            }
+
             ulong* clientIds = stackalloc ulong[] { clientId };
-            return SendPreSerializedMessage(tmpSerializer, maxSize, ref message, delivery, new PointerListWrapper<ulong>(clientIds, 1));
+            return SendPreSerializedMessage(tmpSerializer, maxSize, ref message, delivery, new PointerListWrapper<ulong>(clientIds, 1), messageVersion);
         }
 
         private struct PointerListWrapper<T> : IReadOnlyList<T>

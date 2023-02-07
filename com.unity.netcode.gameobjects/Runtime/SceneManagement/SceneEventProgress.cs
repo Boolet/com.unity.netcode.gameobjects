@@ -58,12 +58,13 @@ namespace Unity.Netcode
         /// <summary>
         /// List of clientIds of those clients that is done loading the scene.
         /// </summary>
-        internal List<ulong> DoneClients { get; } = new List<ulong>();
+        internal Dictionary<ulong, bool> ClientsProcessingSceneEvent { get; } = new Dictionary<ulong, bool>();
+        internal List<ulong> ClientsThatDisconnected = new List<ulong>();
 
         /// <summary>
-        /// The NetworkTime at the moment the scene switch was initiated by the server.
+        /// This is when the current scene event will have timed out
         /// </summary>
-        internal NetworkTime TimeAtInitiation { get; }
+        internal float WhenSceneEventHasTimedOut;
 
         /// <summary>
         /// Delegate type for when the switch scene progress is completed. Either by all clients done loading the scene or by time out.
@@ -75,17 +76,15 @@ namespace Unity.Netcode
         /// </summary>
         internal OnCompletedDelegate OnComplete;
 
-        /// <summary>
-        /// Is this scene switch progresses completed, all clients are done loading the scene or a timeout has occurred.
-        /// </summary>
-        internal bool IsCompleted { get; private set; }
-
-        internal bool TimedOut { get; private set; }
+        internal Action<uint> OnSceneEventCompleted;
 
         /// <summary>
-        /// If all clients are done loading the scene, at the moment of completed.
+        /// This will make sure that we only have timed out if we never completed
         /// </summary>
-        internal bool AreAllClientsDoneLoading { get; private set; }
+        internal bool HasTimedOut()
+        {
+            return WhenSceneEventHasTimedOut <= Time.realtimeSinceStartup;
+        }
 
         /// <summary>
         /// The hash value generated from the full scene path
@@ -93,9 +92,10 @@ namespace Unity.Netcode
         internal uint SceneHash { get; set; }
 
         internal Guid Guid { get; } = Guid.NewGuid();
+        internal uint SceneEventId;
 
         private Coroutine m_TimeOutCoroutine;
-        private AsyncOperation m_SceneLoadOperation;
+        private AsyncOperation m_AsyncOperation;
 
         private NetworkManager m_NetworkManager { get; }
 
@@ -105,55 +105,195 @@ namespace Unity.Netcode
 
         internal LoadSceneMode LoadSceneMode;
 
+        internal List<ulong> GetClientsWithStatus(bool completedSceneEvent)
+        {
+            var clients = new List<ulong>();
+            if (completedSceneEvent)
+            {
+                // If we are the host, then add the host-client to the list
+                // of clients that completed if the AsyncOperation is done.
+                if (m_NetworkManager.IsHost && m_AsyncOperation.isDone)
+                {
+                    clients.Add(m_NetworkManager.LocalClientId);
+                }
+
+                // Add all clients that completed the scene event
+                foreach (var clientStatus in ClientsProcessingSceneEvent)
+                {
+                    if (clientStatus.Value == completedSceneEvent)
+                    {
+                        clients.Add(clientStatus.Key);
+                    }
+                }
+            }
+            else
+            {
+                // If we are the host, then add the host-client to the list
+                // of clients that did not complete if the AsyncOperation is
+                // not done.
+                if (m_NetworkManager.IsHost && !m_AsyncOperation.isDone)
+                {
+                    clients.Add(m_NetworkManager.LocalClientId);
+                }
+
+                // If we are getting the list of clients that have not completed the
+                // scene event, then add any clients that disconnected during this
+                // scene event.
+                clients.AddRange(ClientsThatDisconnected);
+            }
+            return clients;
+        }
+
         internal SceneEventProgress(NetworkManager networkManager, SceneEventProgressStatus status = SceneEventProgressStatus.Started)
         {
             if (status == SceneEventProgressStatus.Started)
             {
                 m_NetworkManager = networkManager;
-                m_TimeOutCoroutine = m_NetworkManager.StartCoroutine(TimeOutSceneEventProgress());
-                TimeAtInitiation = networkManager.LocalTime;
+
+                if (networkManager.IsServer)
+                {
+                    m_NetworkManager.OnClientDisconnectCallback += OnClientDisconnectCallback;
+                    // Track the clients that were connected when we started this event
+                    foreach (var connectedClientId in networkManager.ConnectedClientsIds)
+                    {
+                        // Ignore the host client
+                        if (NetworkManager.ServerClientId == connectedClientId)
+                        {
+                            continue;
+                        }
+                        ClientsProcessingSceneEvent.Add(connectedClientId, false);
+                    }
+
+                    WhenSceneEventHasTimedOut = Time.realtimeSinceStartup + networkManager.NetworkConfig.LoadSceneTimeOut;
+                    m_TimeOutCoroutine = m_NetworkManager.StartCoroutine(TimeOutSceneEventProgress());
+                }
             }
             Status = status;
         }
 
+        /// <summary>
+        /// Remove the client from the clients processing the current scene event
+        /// Add this client to the clients that disconnected list
+        /// </summary>
+        private void OnClientDisconnectCallback(ulong clientId)
+        {
+            if (ClientsProcessingSceneEvent.ContainsKey(clientId))
+            {
+                ClientsThatDisconnected.Add(clientId);
+                ClientsProcessingSceneEvent.Remove(clientId);
+            }
+        }
+
+        /// <summary>
+        /// Coroutine that checks to see if the scene event is complete every network tick period.
+        /// This will handle completing the scene event when one or more client(s) disconnect(s)
+        /// during a scene event and if it does not complete within the scene loading time out period
+        /// it will time out the scene event.
+        /// </summary>
         internal IEnumerator TimeOutSceneEventProgress()
         {
-            yield return new WaitForSecondsRealtime(m_NetworkManager.NetworkConfig.LoadSceneTimeOut);
-            TimedOut = true;
-            CheckCompletion();
-        }
-
-        internal void AddClientAsDone(ulong clientId)
-        {
-            DoneClients.Add(clientId);
-            CheckCompletion();
-        }
-
-        internal void RemoveClientAsDone(ulong clientId)
-        {
-            DoneClients.Remove(clientId);
-            CheckCompletion();
-        }
-
-        internal void SetSceneLoadOperation(AsyncOperation sceneLoadOperation)
-        {
-            m_SceneLoadOperation = sceneLoadOperation;
-            m_SceneLoadOperation.completed += operation => CheckCompletion();
-        }
-
-        internal void CheckCompletion()
-        {
-            if ((!IsCompleted && DoneClients.Count == m_NetworkManager.ConnectedClientsList.Count && m_SceneLoadOperation.isDone) || (!IsCompleted && TimedOut))
+            var waitForNetworkTick = new WaitForSeconds(1.0f / m_NetworkManager.NetworkConfig.TickRate);
+            while (!HasTimedOut())
             {
-                IsCompleted = true;
-                AreAllClientsDoneLoading = true;
+                yield return waitForNetworkTick;
 
-                // If OnComplete is not registered or it is and returns true then remove this from the progress tracking
-                if (OnComplete == null || (OnComplete != null && OnComplete.Invoke(this)))
+                TryFinishingSceneEventProgress();
+            }
+        }
+
+        /// <summary>
+        /// Sets the client's scene event progress to finished/true
+        /// </summary>
+        internal void ClientFinishedSceneEvent(ulong clientId)
+        {
+            if (ClientsProcessingSceneEvent.ContainsKey(clientId))
+            {
+                ClientsProcessingSceneEvent[clientId] = true;
+                TryFinishingSceneEventProgress();
+            }
+        }
+
+        /// <summary>
+        /// Determines if the scene event has finished for both
+        /// client(s) and server.
+        /// </summary>
+        /// <remarks>
+        /// The server checks if all known clients processing this scene event
+        /// have finished and then it returns its local AsyncOperation status.
+        /// Clients finish when their AsyncOperation finishes.
+        /// </remarks>
+        private bool HasFinished()
+        {
+            // If the network session is terminated/terminating then finish tracking
+            // this scene event
+            if (!IsNetworkSessionActive())
+            {
+                return true;
+            }
+
+            // Clients skip over this
+            foreach (var clientStatus in ClientsProcessingSceneEvent)
+            {
+                if (!clientStatus.Value)
                 {
-                    m_NetworkManager.SceneManager.SceneEventProgressTracking.Remove(Guid);
+                    return false;
                 }
-                m_NetworkManager.StopCoroutine(m_TimeOutCoroutine);
+            }
+
+            // Return the local scene event's AsyncOperation status
+            // Note: Integration tests process scene loading through a queue
+            // and the AsyncOperation could not be assigned for several
+            // network tick periods. Return false if that is the case.
+            return m_AsyncOperation == null ? false : m_AsyncOperation.isDone;
+        }
+
+        /// <summary>
+        /// Sets the AsyncOperation for the scene load/unload event
+        /// </summary>
+        internal void SetAsyncOperation(AsyncOperation asyncOperation)
+        {
+            m_AsyncOperation = asyncOperation;
+            m_AsyncOperation.completed += new Action<AsyncOperation>(asyncOp2 =>
+            {
+                // Don't invoke the callback if the network session is disconnected
+                // during a SceneEventProgress
+                if (IsNetworkSessionActive())
+                {
+                    OnSceneEventCompleted?.Invoke(SceneEventId);
+                }
+
+                // Go ahead and try finishing even if the network session is terminated/terminating
+                // as we might need to stop the coroutine
+                TryFinishingSceneEventProgress();
+            });
+        }
+
+
+        internal bool IsNetworkSessionActive()
+        {
+            return m_NetworkManager != null && m_NetworkManager.IsListening && !m_NetworkManager.ShutdownInProgress;
+        }
+
+        /// <summary>
+        /// Will try to finish the current scene event in progress as long as
+        /// all conditions are met.
+        /// </summary>
+        internal void TryFinishingSceneEventProgress()
+        {
+            if (HasFinished() || HasTimedOut())
+            {
+                // Don't attempt to finalize this scene event if we are no longer listening or a shutdown is in progress
+                if (IsNetworkSessionActive())
+                {
+                    OnComplete?.Invoke(this);
+                    m_NetworkManager.SceneManager.SceneEventProgressTracking.Remove(Guid);
+                    m_NetworkManager.OnClientDisconnectCallback -= OnClientDisconnectCallback;
+                }
+
+                if (m_TimeOutCoroutine != null)
+                {
+                    m_NetworkManager.StopCoroutine(m_TimeOutCoroutine);
+                }
             }
         }
     }

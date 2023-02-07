@@ -14,9 +14,24 @@ namespace Unity.Netcode
         public static LogLevel CurrentLogLevel => NetworkManager.Singleton == null ? LogLevel.Normal : NetworkManager.Singleton.LogLevel;
 
         // internal logging
-        internal static void LogInfo(string message) => Debug.Log($"[Netcode] {message}");
-        internal static void LogWarning(string message) => Debug.LogWarning($"[Netcode] {message}");
-        internal static void LogError(string message) => Debug.LogError($"[Netcode] {message}");
+
+        /// <summary>
+        /// Locally logs a info log with Netcode prefixing.
+        /// </summary>
+        /// <param name="message">The message to log</param>
+        public static void LogInfo(string message) => Debug.Log($"[Netcode] {message}");
+
+        /// <summary>
+        /// Locally logs a warning log with Netcode prefixing.
+        /// </summary>
+        /// <param name="message">The message to log</param>
+        public static void LogWarning(string message) => Debug.LogWarning($"[Netcode] {message}");
+
+        /// <summary>
+        /// Locally logs a error log with Netcode prefixing.
+        /// </summary>
+        /// <param name="message">The message to log</param>
+        public static void LogError(string message) => Debug.LogError($"[Netcode] {message}");
 
         /// <summary>
         /// Logs an info log locally and on the server if possible.
@@ -62,9 +77,9 @@ namespace Unity.Netcode
                     LogType = logType,
                     Message = message
                 };
-                var size = NetworkManager.Singleton.SendMessage(ref networkMessage, NetworkDelivery.ReliableFragmentedSequenced, NetworkManager.Singleton.ServerClientId);
+                var size = NetworkManager.Singleton.SendMessage(ref networkMessage, NetworkDelivery.ReliableFragmentedSequenced, NetworkManager.ServerClientId);
 
-                NetworkManager.Singleton.NetworkMetrics.TrackServerLogSent(NetworkManager.Singleton.ServerClientId, (uint)logType, size);
+                NetworkManager.Singleton.NetworkMetrics.TrackServerLogSent(NetworkManager.ServerClientId, (uint)logType, size);
             }
         }
 

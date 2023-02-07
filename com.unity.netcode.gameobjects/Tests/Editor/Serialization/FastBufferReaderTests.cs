@@ -1,4 +1,5 @@
 using System;
+using System.Reflection;
 using NUnit.Framework;
 using Unity.Collections;
 using UnityEngine;
@@ -51,6 +52,184 @@ namespace Unity.Netcode.EditorTests
 
             return reader;
         }
+
+        private void RunWriteMethod<T>(string methodName, FastBufferWriter writer, in T value) where T : unmanaged
+        {
+            MethodInfo method = typeof(FastBufferWriter).GetMethod(methodName, new[] { typeof(T).MakeByRefType() });
+            if (method == null)
+            {
+                foreach (var candidateMethod in typeof(FastBufferWriter).GetMethods())
+                {
+                    if (candidateMethod.Name == methodName && candidateMethod.IsGenericMethodDefinition)
+                    {
+                        if (candidateMethod.GetParameters().Length == 0 || (candidateMethod.GetParameters().Length > 1 && !candidateMethod.GetParameters()[1].HasDefaultValue))
+                        {
+                            continue;
+                        }
+                        if (candidateMethod.GetParameters()[0].ParameterType.IsArray)
+                        {
+                            continue;
+                        }
+                        try
+                        {
+                            method = candidateMethod.MakeGenericMethod(typeof(T));
+                            break;
+                        }
+                        catch (ArgumentException)
+                        {
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            Assert.NotNull(method);
+
+            object[] args = new object[method.GetParameters().Length];
+            args[0] = value;
+            for (var i = 1; i < args.Length; ++i)
+            {
+                args[i] = method.GetParameters()[i].DefaultValue;
+            }
+            method.Invoke(writer, args);
+        }
+
+        private void RunWriteMethod<T>(string methodName, FastBufferWriter writer, in T[] value) where T : unmanaged
+        {
+            MethodInfo method = typeof(FastBufferWriter).GetMethod(methodName, new[] { typeof(T[]) });
+            if (method == null)
+            {
+                foreach (var candidateMethod in typeof(FastBufferWriter).GetMethods())
+                {
+                    if (candidateMethod.Name == methodName && candidateMethod.IsGenericMethodDefinition)
+                    {
+                        if (candidateMethod.GetParameters().Length == 0 || (candidateMethod.GetParameters().Length > 1 && !candidateMethod.GetParameters()[1].HasDefaultValue))
+                        {
+                            continue;
+                        }
+                        if (!candidateMethod.GetParameters()[0].ParameterType.IsArray)
+                        {
+                            continue;
+                        }
+                        try
+                        {
+                            method = candidateMethod.MakeGenericMethod(typeof(T));
+                            break;
+                        }
+                        catch (ArgumentException)
+                        {
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            Assert.NotNull(method);
+
+            object[] args = new object[method.GetParameters().Length];
+            args[0] = value;
+            for (var i = 1; i < args.Length; ++i)
+            {
+                args[i] = method.GetParameters()[i].DefaultValue;
+            }
+            method.Invoke(writer, args);
+        }
+
+        private void RunReadMethod<T>(string methodName, FastBufferReader reader, out T value) where T : unmanaged
+        {
+            MethodInfo method = typeof(FastBufferReader).GetMethod(methodName, new[] { typeof(T).MakeByRefType() });
+            if (method == null)
+            {
+                foreach (var candidateMethod in typeof(FastBufferReader).GetMethods())
+                {
+                    if (candidateMethod.Name == methodName && candidateMethod.IsGenericMethodDefinition)
+                    {
+                        if (candidateMethod.GetParameters().Length == 0 || (candidateMethod.GetParameters().Length > 1 && !candidateMethod.GetParameters()[1].HasDefaultValue))
+                        {
+                            continue;
+                        }
+                        if (candidateMethod.GetParameters()[0].ParameterType.IsArray)
+                        {
+                            continue;
+                        }
+                        try
+                        {
+                            method = candidateMethod.MakeGenericMethod(typeof(T));
+                            break;
+                        }
+                        catch (ArgumentException)
+                        {
+                            continue;
+                        }
+                    }
+                }
+            }
+            value = new T();
+
+            Assert.NotNull(method);
+
+            object[] args = new object[method.GetParameters().Length];
+            args[0] = value;
+            for (var i = 1; i < args.Length; ++i)
+            {
+                args[i] = method.GetParameters()[i].DefaultValue;
+            }
+            method.Invoke(reader, args);
+            value = (T)args[0];
+        }
+
+        private void RunReadMethod<T>(string methodName, FastBufferReader reader, out T[] value) where T : unmanaged
+        {
+            MethodInfo method = null;
+
+            try
+            {
+                method = typeof(FastBufferReader).GetMethod(methodName, new[] { typeof(T[]).MakeByRefType() });
+            }
+            catch (AmbiguousMatchException)
+            {
+                // skip.
+            }
+            if (method == null)
+            {
+                foreach (var candidateMethod in typeof(FastBufferReader).GetMethods())
+                {
+                    if (candidateMethod.Name == methodName && candidateMethod.IsGenericMethodDefinition)
+                    {
+                        if (candidateMethod.GetParameters().Length == 0 || (candidateMethod.GetParameters().Length > 1 && !candidateMethod.GetParameters()[1].HasDefaultValue))
+                        {
+                            continue;
+                        }
+                        if (!candidateMethod.GetParameters()[0].ParameterType.HasElementType || !candidateMethod.GetParameters()[0].ParameterType.GetElementType().IsArray)
+                        {
+                            continue;
+                        }
+                        try
+                        {
+                            method = candidateMethod.MakeGenericMethod(typeof(T));
+                            break;
+                        }
+                        catch (ArgumentException)
+                        {
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            Assert.NotNull(method);
+
+            value = new T[] { };
+
+            object[] args = new object[method.GetParameters().Length];
+            args[0] = value;
+            for (var i = 1; i < args.Length; ++i)
+            {
+                args[i] = method.GetParameters()[i].DefaultValue;
+            }
+            method.Invoke(reader, args);
+            value = (T[])args[0];
+        }
         #endregion
 
         #region Generic Checks
@@ -66,14 +245,14 @@ namespace Unity.Netcode.EditorTests
 
                 var failMessage = $"RunTypeTest failed with type {typeof(T)} and value {valueToTest}";
 
-                writer.WriteValue(valueToTest);
+                RunWriteMethod(nameof(FastBufferWriter.WriteValue), writer, valueToTest);
 
                 var reader = CommonChecks(writer, valueToTest, writeSize, failMessage);
 
                 using (reader)
                 {
                     Assert.IsTrue(reader.TryBeginRead(FastBufferWriter.GetWriteSize<T>()));
-                    reader.ReadValue(out T result);
+                    RunReadMethod(nameof(FastBufferReader.ReadValue), reader, out T result);
                     Assert.AreEqual(valueToTest, result);
                 }
             }
@@ -89,14 +268,14 @@ namespace Unity.Netcode.EditorTests
 
                 var failMessage = $"RunTypeTest failed with type {typeof(T)} and value {valueToTest}";
 
-                writer.WriteValueSafe(valueToTest);
+                RunWriteMethod(nameof(FastBufferWriter.WriteValueSafe), writer, valueToTest);
 
 
                 var reader = CommonChecks(writer, valueToTest, writeSize, failMessage);
 
                 using (reader)
                 {
-                    reader.ReadValueSafe(out T result);
+                    RunReadMethod(nameof(FastBufferReader.ReadValueSafe), reader, out T result);
                     Assert.AreEqual(valueToTest, result);
                 }
             }
@@ -121,7 +300,7 @@ namespace Unity.Netcode.EditorTests
                 Assert.AreEqual(sizeof(int) + sizeof(T) * valueToTest.Length, writeSize);
                 Assert.IsTrue(writer.TryBeginWrite(writeSize + 2), "Writer denied write permission");
 
-                writer.WriteValue(valueToTest);
+                RunWriteMethod(nameof(FastBufferWriter.WriteValue), writer, valueToTest);
 
                 WriteCheckBytes(writer, writeSize);
 
@@ -131,7 +310,7 @@ namespace Unity.Netcode.EditorTests
                     VerifyPositionAndLength(reader, writer.Length);
 
                     Assert.IsTrue(reader.TryBeginRead(writeSize));
-                    reader.ReadValue(out T[] result);
+                    RunReadMethod(nameof(FastBufferReader.ReadValue), reader, out T[] result);
                     VerifyArrayEquality(valueToTest, result, 0);
 
                     VerifyCheckBytes(reader, writeSize);
@@ -147,7 +326,7 @@ namespace Unity.Netcode.EditorTests
             {
                 Assert.AreEqual(sizeof(int) + sizeof(T) * valueToTest.Length, writeSize);
 
-                writer.WriteValueSafe(valueToTest);
+                RunWriteMethod(nameof(FastBufferWriter.WriteValueSafe), writer, valueToTest);
 
                 WriteCheckBytes(writer, writeSize);
 
@@ -156,7 +335,7 @@ namespace Unity.Netcode.EditorTests
                 {
                     VerifyPositionAndLength(reader, writer.Length);
 
-                    reader.ReadValueSafe(out T[] result);
+                    RunReadMethod(nameof(FastBufferReader.ReadValueSafe), reader, out T[] result);
                     VerifyArrayEquality(valueToTest, result, 0);
 
                     VerifyCheckBytes(reader, writeSize);
@@ -172,8 +351,9 @@ namespace Unity.Netcode.EditorTests
             [Values(typeof(byte), typeof(sbyte), typeof(short), typeof(ushort), typeof(int), typeof(uint),
                 typeof(long), typeof(ulong), typeof(bool), typeof(char), typeof(float), typeof(double),
                 typeof(ByteEnum), typeof(SByteEnum), typeof(ShortEnum), typeof(UShortEnum), typeof(IntEnum),
-                typeof(UIntEnum), typeof(LongEnum), typeof(ULongEnum), typeof(Vector2), typeof(Vector3), typeof(Vector4),
-                typeof(Quaternion), typeof(Color), typeof(Color32), typeof(Ray), typeof(Ray2D), typeof(TestStruct))]
+                typeof(UIntEnum), typeof(LongEnum), typeof(ULongEnum), typeof(Vector2), typeof(Vector3),
+                typeof(Vector2Int), typeof(Vector3Int), typeof(Vector4), typeof(Quaternion), typeof(Color),
+                typeof(Color32), typeof(Ray), typeof(Ray2D), typeof(TestStruct))]
             Type testType,
             [Values] WriteType writeType)
         {
@@ -185,12 +365,154 @@ namespace Unity.Netcode.EditorTests
             [Values(typeof(byte), typeof(sbyte), typeof(short), typeof(ushort), typeof(int), typeof(uint),
                 typeof(long), typeof(ulong), typeof(bool), typeof(char), typeof(float), typeof(double),
                 typeof(ByteEnum), typeof(SByteEnum), typeof(ShortEnum), typeof(UShortEnum), typeof(IntEnum),
-                typeof(UIntEnum), typeof(LongEnum), typeof(ULongEnum), typeof(Vector2), typeof(Vector3), typeof(Vector4),
-                typeof(Quaternion), typeof(Color), typeof(Color32), typeof(Ray), typeof(Ray2D), typeof(TestStruct))]
+                typeof(UIntEnum), typeof(LongEnum), typeof(ULongEnum), typeof(Vector2), typeof(Vector3),
+                typeof(Vector2Int), typeof(Vector3Int), typeof(Vector4), typeof(Quaternion), typeof(Color),
+                typeof(Color32), typeof(Ray), typeof(Ray2D), typeof(TestStruct))]
             Type testType,
             [Values] WriteType writeType)
         {
             BaseArrayTypeTest(testType, writeType);
+        }
+
+
+        public unsafe void RunFixedStringTest<T>(T fixedStringValue, int numBytesWritten, WriteType writeType) where T : unmanaged, INativeList<byte>, IUTF8Bytes
+        {
+            fixedStringValue.Length = numBytesWritten;
+
+            var serializedValueSize = FastBufferWriter.GetWriteSize(fixedStringValue);
+
+            Assert.AreEqual(serializedValueSize, fixedStringValue.Length + sizeof(int));
+
+            var writer = new FastBufferWriter(serializedValueSize + 3, Allocator.Temp);
+            using (writer)
+            {
+                var offset = 0;
+                switch (writeType)
+                {
+                    case WriteType.WriteDirect:
+                        Assert.IsTrue(writer.TryBeginWrite(serializedValueSize + 2), "Writer denied write permission");
+                        writer.WriteValue(fixedStringValue);
+                        break;
+                    case WriteType.WriteSafe:
+                        writer.WriteValueSafe(fixedStringValue);
+                        break;
+
+                }
+
+                WriteCheckBytes(writer, serializedValueSize + offset);
+
+                var reader = new FastBufferReader(writer, Allocator.Temp);
+                using (reader)
+                {
+                    VerifyPositionAndLength(reader, writer.Length);
+
+                    var result = new T();
+                    reader.ReadValueSafe(out result);
+                    Assert.AreEqual(fixedStringValue, result);
+
+                    VerifyCheckBytes(reader, serializedValueSize);
+                }
+            }
+        }
+
+        [TestCase(3, WriteType.WriteDirect)]
+        [TestCase(5, WriteType.WriteSafe)]
+        [TestCase(16, WriteType.WriteDirect)]
+        [TestCase(29, WriteType.WriteSafe)]
+        public void WhenReadingFixedString32Bytes_ValueIsReadCorrectly(int numBytesWritten, WriteType writeType)
+        {
+            // Repeats 01234567890123456789...
+            string valueToTest = "";
+            for (var i = 0; i < 29; ++i)
+            {
+                valueToTest += (i % 10).ToString();
+            }
+
+            var fixedStringValue = new FixedString32Bytes(valueToTest);
+
+            RunFixedStringTest(fixedStringValue, numBytesWritten, writeType);
+        }
+
+        [TestCase(3, WriteType.WriteDirect)]
+        [TestCase(5, WriteType.WriteSafe)]
+        [TestCase(16, WriteType.WriteDirect)]
+        [TestCase(29, WriteType.WriteSafe)]
+        [TestCase(61, WriteType.WriteSafe)]
+        public void WhenReadingFixedString64Bytes_ValueIsReadCorrectly(int numBytesWritten, WriteType writeType)
+        {
+            // Repeats 01234567890123456789...
+            string valueToTest = "";
+            for (var i = 0; i < 61; ++i)
+            {
+                valueToTest += (i % 10).ToString();
+            }
+
+            var fixedStringValue = new FixedString64Bytes(valueToTest);
+
+            RunFixedStringTest(fixedStringValue, numBytesWritten, writeType);
+        }
+
+        [TestCase(3, WriteType.WriteDirect)]
+        [TestCase(5, WriteType.WriteSafe)]
+        [TestCase(16, WriteType.WriteDirect)]
+        [TestCase(29, WriteType.WriteSafe)]
+        [TestCase(61, WriteType.WriteSafe)]
+        [TestCase(125, WriteType.WriteSafe)]
+        public void WhenReadingFixedString128Bytes_ValueIsReadCorrectly(int numBytesWritten, WriteType writeType)
+        {
+            // Repeats 01234567890123456789...
+            string valueToTest = "";
+            for (var i = 0; i < 125; ++i)
+            {
+                valueToTest += (i % 10).ToString();
+            }
+
+            var fixedStringValue = new FixedString128Bytes(valueToTest);
+
+            RunFixedStringTest(fixedStringValue, numBytesWritten, writeType);
+        }
+
+        [TestCase(3, WriteType.WriteDirect)]
+        [TestCase(5, WriteType.WriteSafe)]
+        [TestCase(16, WriteType.WriteDirect)]
+        [TestCase(29, WriteType.WriteSafe)]
+        [TestCase(61, WriteType.WriteSafe)]
+        [TestCase(125, WriteType.WriteSafe)]
+        [TestCase(509, WriteType.WriteSafe)]
+        public void WhenReadingFixedString512Bytes_ValueIsReadCorrectly(int numBytesWritten, WriteType writeType)
+        {
+            // Repeats 01234567890123456789...
+            string valueToTest = "";
+            for (var i = 0; i < 509; ++i)
+            {
+                valueToTest += (i % 10).ToString();
+            }
+
+            var fixedStringValue = new FixedString512Bytes(valueToTest);
+
+            RunFixedStringTest(fixedStringValue, numBytesWritten, writeType);
+        }
+
+        [TestCase(3, WriteType.WriteDirect)]
+        [TestCase(5, WriteType.WriteSafe)]
+        [TestCase(16, WriteType.WriteDirect)]
+        [TestCase(29, WriteType.WriteSafe)]
+        [TestCase(61, WriteType.WriteSafe)]
+        [TestCase(125, WriteType.WriteSafe)]
+        [TestCase(509, WriteType.WriteSafe)]
+        [TestCase(4093, WriteType.WriteSafe)]
+        public void WhenReadingFixedString4096Bytes_ValueIsReadCorrectly(int numBytesWritten, WriteType writeType)
+        {
+            // Repeats 01234567890123456789...
+            string valueToTest = "";
+            for (var i = 0; i < 4093; ++i)
+            {
+                valueToTest += (i % 10).ToString();
+            }
+
+            var fixedStringValue = new FixedString4096Bytes(valueToTest);
+
+            RunFixedStringTest(fixedStringValue, numBytesWritten, writeType);
         }
 
         [TestCase(false, WriteType.WriteDirect)]
@@ -346,6 +668,80 @@ namespace Unity.Netcode.EditorTests
             }
         }
 
+        [Test]
+        public void WhenCreatingAReaderFromAnEmptyArraySegment_LengthIsZero()
+        {
+            var bytes = new byte[] { };
+            var input = new ArraySegment<byte>(bytes, 0, 0);
+            using var reader = new FastBufferReader(input, Allocator.Temp);
+            Assert.AreEqual(0, reader.Length);
+        }
+
+        [Test]
+        public void WhenCreatingAReaderFromAnEmptyArray_LengthIsZero()
+        {
+            var input = new byte[] { };
+            using var reader = new FastBufferReader(input, Allocator.Temp);
+            Assert.AreEqual(0, reader.Length);
+        }
+
+        [Test]
+        public void WhenCreatingAReaderFromAnEmptyNativeArray_LengthIsZero()
+        {
+            var input = new NativeArray<byte>(0, Allocator.Temp);
+            using var reader = new FastBufferReader(input, Allocator.Temp);
+            Assert.AreEqual(0, reader.Length);
+        }
+
+        [Test]
+        public void WhenCreatingAReaderFromAnEmptyFastBufferWriter_LengthIsZero()
+        {
+            var input = new FastBufferWriter(0, Allocator.Temp);
+            using var reader = new FastBufferReader(input, Allocator.Temp);
+            Assert.AreEqual(0, reader.Length);
+        }
+
+        [Test]
+        public void WhenCreatingAReaderFromAnEmptyBuffer_LengthIsZero()
+        {
+            var input = new byte[] { };
+            unsafe
+            {
+                fixed (byte* ptr = input)
+                {
+                    using var reader = new FastBufferReader(ptr, Allocator.Temp, 0);
+                    Assert.AreEqual(0, reader.Length);
+                }
+            }
+        }
+
+        [Test]
+        public void WhenCreatingNewFastBufferReader_IsInitializedIsTrue()
+        {
+            var array = new NativeArray<byte>(100, Allocator.Temp);
+            var reader = new FastBufferReader(array, Allocator.Temp);
+            Assert.AreEqual(true, reader.IsInitialized);
+            reader.Dispose();
+            array.Dispose();
+        }
+
+        [Test]
+        public void WhenDisposingFastBufferReader_IsInitializedIsFalse()
+        {
+            var array = new NativeArray<byte>(100, Allocator.Temp);
+            var reader = new FastBufferReader(array, Allocator.Temp);
+            reader.Dispose();
+            Assert.AreEqual(false, reader.IsInitialized);
+            array.Dispose();
+            Assert.AreEqual(false, reader.IsInitialized);
+        }
+
+        [Test]
+        public void WhenUsingDefaultFastBufferReader_IsInitializedIsFalse()
+        {
+            FastBufferReader writer = default;
+            Assert.AreEqual(false, writer.IsInitialized);
+        }
 
         [Test]
         public void WhenCallingReadByteWithoutCallingTryBeingReadFirst_OverflowExceptionIsThrown()

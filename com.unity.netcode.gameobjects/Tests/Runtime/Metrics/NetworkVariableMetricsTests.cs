@@ -1,18 +1,20 @@
 #if MULTIPLAYER_TOOLS
-using System;
 using System.Collections;
 using System.Linq;
 using NUnit.Framework;
 using Unity.Multiplayer.Tools.MetricTypes;
-using Unity.Netcode.RuntimeTests.Metrics.Utility;
-using UnityEngine;
 using UnityEngine.TestTools;
+using Unity.Netcode.TestHelpers.Runtime.Metrics;
 
 namespace Unity.Netcode.RuntimeTests.Metrics
 {
     internal class NetworkVariableMetricsTests : SingleClientMetricTestBase
     {
-        protected override Action<GameObject> UpdatePlayerPrefab => prefab => prefab.AddComponent<NetworkVariableComponent>();
+        protected override void OnCreatePlayerPrefab()
+        {
+            m_PlayerPrefab.AddComponent<NetworkVariableComponent>();
+            base.OnCreatePlayerPrefab();
+        }
 
         [UnityTest]
         public IEnumerator TrackNetworkVariableDeltaSentMetric()
@@ -23,10 +25,17 @@ namespace Unity.Netcode.RuntimeTests.Metrics
 
             var metricValues = waitForMetricValues.AssertMetricValuesHaveBeenFound();
 
-            var networkVariableDeltaSent = metricValues.First();
-            Assert.AreEqual(nameof(NetworkVariableComponent.MyNetworkVariable), networkVariableDeltaSent.Name);
-            Assert.AreEqual(Server.LocalClientId, networkVariableDeltaSent.Connection.Id);
-            Assert.AreNotEqual(0, networkVariableDeltaSent.BytesCount);
+            bool found = false;
+            foreach (var networkVariableDeltaSent in metricValues)
+            {
+                if (nameof(NetworkVariableComponent.MyNetworkVariable) == networkVariableDeltaSent.Name &&
+                    Client.LocalClientId == networkVariableDeltaSent.Connection.Id &&
+                    0 != networkVariableDeltaSent.BytesCount)
+                {
+                    found = true;
+                }
+            }
+            Assert.IsTrue(found);
         }
 
         [UnityTest]

@@ -4,9 +4,10 @@ using NUnit.Framework;
 using Unity.Collections;
 using UnityEngine;
 using UnityEngine.TestTools;
+using Unity.Netcode.TestHelpers.Runtime;
 using Object = UnityEngine.Object;
 
-namespace Unity.Netcode.RuntimeTests.Serialization
+namespace Unity.Netcode.RuntimeTests
 {
     /// <summary>
     /// Unit tests to test:
@@ -109,6 +110,32 @@ namespace Unity.Netcode.RuntimeTests.Serialization
             }
         }
 
+        [Test]
+        public void TestImplicitConversionToGameObject()
+        {
+            using var networkObjectContext = UnityObjectContext.CreateNetworkObject();
+            networkObjectContext.Object.Spawn();
+
+            NetworkObjectReference outReference = networkObjectContext.Object.gameObject;
+
+            GameObject go = outReference;
+            Assert.AreEqual(networkObjectContext.Object.gameObject, go);
+        }
+
+        [Test]
+        public void TestImplicitToGameObjectIsNullWhenNotFound()
+        {
+            using var networkObjectContext = UnityObjectContext.CreateNetworkObject();
+            networkObjectContext.Object.Spawn();
+
+            NetworkObjectReference outReference = networkObjectContext.Object.gameObject;
+
+            networkObjectContext.Object.Despawn();
+            Object.DestroyImmediate(networkObjectContext.Object.gameObject);
+
+            GameObject go = outReference;
+            Assert.IsNull(go);
+        }
         [Test]
         public void TestTryGet()
         {

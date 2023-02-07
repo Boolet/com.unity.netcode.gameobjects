@@ -4,6 +4,7 @@ using System.Collections;
 using UnityEngine;
 using UnityEngine.TestTools;
 using NUnit.Framework;
+using Unity.Netcode.TestHelpers.Runtime;
 
 namespace Unity.Netcode.RuntimeTests
 {
@@ -23,7 +24,7 @@ namespace Unity.Netcode.RuntimeTests
         [UnityTest]
         public IEnumerator ConnectionApproval()
         {
-            NetworkManagerHelper.NetworkManagerObject.ConnectionApprovalCallback += NetworkManagerObject_ConnectionApprovalCallback;
+            NetworkManagerHelper.NetworkManagerObject.ConnectionApprovalCallback = NetworkManagerObject_ConnectionApprovalCallback;
             NetworkManagerHelper.NetworkManagerObject.NetworkConfig.ConnectionApproval = true;
             NetworkManagerHelper.NetworkManagerObject.NetworkConfig.PlayerPrefab = null;
             NetworkManagerHelper.NetworkManagerObject.NetworkConfig.ConnectionData = Encoding.UTF8.GetBytes(m_ValidationToken.ToString());
@@ -46,14 +47,34 @@ namespace Unity.Netcode.RuntimeTests
             Assert.True(m_IsValidated);
         }
 
-        private void NetworkManagerObject_ConnectionApprovalCallback(byte[] connectionData, ulong clientId, NetworkManager.ConnectionApprovedDelegate callback)
+        private void NetworkManagerObject_ConnectionApprovalCallback(NetworkManager.ConnectionApprovalRequest request, NetworkManager.ConnectionApprovalResponse response)
         {
-            var stringGuid = Encoding.UTF8.GetString(connectionData);
+            var stringGuid = Encoding.UTF8.GetString(request.Payload);
             if (m_ValidationToken.ToString() == stringGuid)
             {
                 m_IsValidated = true;
             }
-            callback(false, null, m_IsValidated, null, null);
+
+            response.Approved = m_IsValidated;
+            response.CreatePlayerObject = false;
+            response.Position = null;
+            response.Rotation = null;
+            response.PlayerPrefabHash = null;
+        }
+
+
+        [Test]
+        public void VerifyUniqueNetworkConfigPerRequest()
+        {
+            var networkConfig = new NetworkConfig();
+            networkConfig.EnableSceneManagement = true;
+            networkConfig.TickRate = 30;
+            var currentHash = networkConfig.GetConfig();
+            networkConfig.EnableSceneManagement = false;
+            networkConfig.TickRate = 60;
+            var newHash = networkConfig.GetConfig(false);
+
+            Assert.True(currentHash != newHash, $"Hashed {nameof(NetworkConfig)} values {currentHash} and {newHash} should not be the same!");
         }
 
         [TearDown]
@@ -62,5 +83,6 @@ namespace Unity.Netcode.RuntimeTests
             // Stop, shutdown, and destroy
             NetworkManagerHelper.ShutdownNetworkManager();
         }
+
     }
 }

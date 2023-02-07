@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Unity.Collections;
 
 namespace Unity.Netcode
 {
@@ -68,9 +69,23 @@ namespace Unity.Netcode
 
             if (clientIds == null)
             {
-                throw new ArgumentNullException("You must pass in a valid clientId List");
+                throw new ArgumentNullException(nameof(clientIds), "You must pass in a valid clientId List");
             }
 
+            if (m_NetworkManager.IsHost)
+            {
+                for (var i = 0; i < clientIds.Count; ++i)
+                {
+                    if (clientIds[i] == m_NetworkManager.LocalClientId)
+                    {
+                        InvokeUnnamedMessage(
+                            m_NetworkManager.LocalClientId,
+                            new FastBufferReader(messageBuffer, Allocator.None),
+                            0
+                        );
+                    }
+                }
+            }
             var message = new UnnamedMessage
             {
                 SendData = messageBuffer
@@ -92,6 +107,18 @@ namespace Unity.Netcode
         /// <param name="networkDelivery">The delivery type (QoS) to send data with</param>
         public void SendUnnamedMessage(ulong clientId, FastBufferWriter messageBuffer, NetworkDelivery networkDelivery = NetworkDelivery.ReliableSequenced)
         {
+            if (m_NetworkManager.IsHost)
+            {
+                if (clientId == m_NetworkManager.LocalClientId)
+                {
+                    InvokeUnnamedMessage(
+                        m_NetworkManager.LocalClientId,
+                        new FastBufferReader(messageBuffer, Allocator.None),
+                        0
+                    );
+                    return;
+                }
+            }
             var message = new UnnamedMessage
             {
                 SendData = messageBuffer
@@ -193,6 +220,7 @@ namespace Unity.Netcode
         /// <summary>
         /// Sends a named message to all clients
         /// </summary>
+        /// <param name="messageName">The message name to send</param>
         /// <param name="messageStream">The message stream containing the data</param>
         /// <param name="networkDelivery">The delivery type (QoS) to send data with</param>
         public void SendNamedMessageToAll(string messageName, FastBufferWriter messageStream, NetworkDelivery networkDelivery = NetworkDelivery.ReliableSequenced)
@@ -219,6 +247,20 @@ namespace Unity.Netcode
                     hash = XXHash.Hash64(messageName);
                     break;
             }
+            if (m_NetworkManager.IsHost)
+            {
+                if (clientId == m_NetworkManager.LocalClientId)
+                {
+                    InvokeNamedMessage(
+                        hash,
+                        m_NetworkManager.LocalClientId,
+                        new FastBufferReader(messageStream, Allocator.None),
+                        0
+                    );
+
+                    return;
+                }
+            }
 
             var message = new NamedMessage
             {
@@ -238,7 +280,7 @@ namespace Unity.Netcode
         /// Sends the named message
         /// </summary>
         /// <param name="messageName">The message name to send</param>
-        /// <param name="clientIds">The clients to send to, sends to everyone if null</param>
+        /// <param name="clientIds">The clients to send to</param>
         /// <param name="messageStream">The message stream containing the data</param>
         /// <param name="networkDelivery">The delivery type (QoS) to send data with</param>
         public void SendNamedMessage(string messageName, IReadOnlyList<ulong> clientIds, FastBufferWriter messageStream, NetworkDelivery networkDelivery = NetworkDelivery.ReliableSequenced)
@@ -250,7 +292,7 @@ namespace Unity.Netcode
 
             if (clientIds == null)
             {
-                throw new ArgumentNullException("You must pass in a valid clientId List");
+                throw new ArgumentNullException(nameof(clientIds), "You must pass in a valid clientId List");
             }
 
             ulong hash = 0;
@@ -262,6 +304,21 @@ namespace Unity.Netcode
                 case HashSize.VarIntEightBytes:
                     hash = XXHash.Hash64(messageName);
                     break;
+            }
+            if (m_NetworkManager.IsHost)
+            {
+                for (var i = 0; i < clientIds.Count; ++i)
+                {
+                    if (clientIds[i] == m_NetworkManager.LocalClientId)
+                    {
+                        InvokeNamedMessage(
+                            hash,
+                            m_NetworkManager.LocalClientId,
+                            new FastBufferReader(messageStream, Allocator.None),
+                            0
+                        );
+                    }
+                }
             }
             var message = new NamedMessage
             {

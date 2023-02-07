@@ -25,7 +25,7 @@ namespace Unity.Netcode
         public double TickOffset => m_CachedTickOffset;
 
         /// <summary>
-        /// Gets the current time. This is a non fixed time value and similar to <see cref="Time.time"/>
+        /// Gets the current time. This is a non fixed time value and similar to <see cref="Time.time"/>.
         /// </summary>
         public double Time => m_TimeSec;
 
@@ -35,13 +35,13 @@ namespace Unity.Netcode
         public float TimeAsFloat => (float)m_TimeSec;
 
         /// <summary>
-        /// Gets he current fixed network time. This is the time value of the last network tick. Similar to <see cref="Time.fixedTime"/>
+        /// Gets he current fixed network time. This is the time value of the last network tick. Similar to <see cref="Time.fixedUnscaledTime"/>.
         /// </summary>
         public double FixedTime => m_CachedTick * m_TickInterval;
 
         /// <summary>
         /// Gets the fixed delta time. This value is based on the <see cref="TickRate"/> and stays constant.
-        /// Similar to <see cref="Time.fixedDeltaTime"/> There is no equivalent to <see cref="Time.deltaTime"/>
+        /// Similar to <see cref="Time.fixedUnscaledTime"/> There is no equivalent to <see cref="Time.deltaTime"/>.
         /// </summary>
         public float FixedDeltaTime => (float)m_TickInterval;
 
@@ -81,7 +81,10 @@ namespace Unity.Netcode
             : this(tickRate)
         {
             Assert.IsTrue(tickOffset < 1d / tickRate);
-            this += tick * m_TickInterval + tickOffset;
+
+            m_CachedTickOffset = tickOffset;
+            m_CachedTick = tick;
+            m_TimeSec = tick * m_TickInterval + tickOffset;
         }
 
         /// <summary>
@@ -105,6 +108,11 @@ namespace Unity.Netcode
             return new NetworkTime(m_TickRate, m_CachedTick);
         }
 
+        /// <summary>
+        /// Returns the time a number of ticks in the past.
+        /// </summary>
+        /// <param name="ticks">The number of ticks ago we're querying the time</param>
+        /// <returns></returns>
         public NetworkTime TimeTicksAgo(int ticks)
         {
             return this - new NetworkTime(TickRate, ticks);
@@ -129,16 +137,34 @@ namespace Unity.Netcode
             }
         }
 
+        /// <summary>
+        /// Computes the time difference between two ticks
+        /// </summary>
+        /// <param name="a">End time</param>
+        /// <param name="b">Start time</param>
+        /// <returns>The time difference between start and end</returns>
         public static NetworkTime operator -(NetworkTime a, NetworkTime b)
         {
             return new NetworkTime(a.TickRate, a.Time - b.Time);
         }
 
+        /// <summary>
+        /// Computes the sum of two times
+        /// </summary>
+        /// <param name="a">First time</param>
+        /// <param name="b">Second time</param>
+        /// <returns>The sum of the two times passed in</returns>
         public static NetworkTime operator +(NetworkTime a, NetworkTime b)
         {
             return new NetworkTime(a.TickRate, a.Time + b.Time);
         }
 
+        /// <summary>
+        /// Computes the time a number of seconds later
+        /// </summary>
+        /// <param name="a">The start time</param>
+        /// <param name="b">The number of seconds to add</param>
+        /// <returns>The resulting time</returns>
         public static NetworkTime operator +(NetworkTime a, double b)
         {
             a.m_TimeSec += b;
@@ -146,6 +172,12 @@ namespace Unity.Netcode
             return a;
         }
 
+        /// <summary>
+        /// Computes the time a number of seconds before
+        /// </summary>
+        /// <param name="a">The start time</param>
+        /// <param name="b">The number of seconds to remove</param>
+        /// <returns>The resulting time</returns>
         public static NetworkTime operator -(NetworkTime a, double b)
         {
             return a + -b;

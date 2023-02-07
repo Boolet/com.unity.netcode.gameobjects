@@ -1,3 +1,4 @@
+#if COM_UNITY_MODULES_PHYSICS2D
 using UnityEngine;
 
 namespace Unity.Netcode.Components
@@ -8,6 +9,7 @@ namespace Unity.Netcode.Components
     /// </summary>
     [RequireComponent(typeof(Rigidbody2D))]
     [RequireComponent(typeof(NetworkTransform))]
+    [AddComponentMenu("Netcode/Network Rigidbody 2D")]
     public class NetworkRigidbody2D : NetworkBehaviour
     {
         private Rigidbody2D m_Rigidbody;
@@ -78,3 +80,4 @@ namespace Unity.Netcode.Components
         }
     }
 }
+#endif // COM_UNITY_MODULES_PHYSICS2D

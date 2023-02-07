@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using System.Linq;
 using Unity.Collections;
+using UnityEngine.Serialization;
 
 namespace Unity.Netcode
 {
@@ -30,20 +31,8 @@ namespace Unity.Netcode
         [Tooltip("When set, NetworkManager will automatically create and spawn the assigned player prefab. This can be overridden by adding it to the NetworkPrefabs list and selecting override.")]
         public GameObject PlayerPrefab;
 
-        /// <summary>
-        /// A list of prefabs that can be dynamically spawned.
-        /// </summary>
         [SerializeField]
-        [Tooltip("The prefabs that can be spawned across the network")]
-        internal List<NetworkPrefab> NetworkPrefabs = new List<NetworkPrefab>();
-
-        /// <summary>
-        /// This dictionary provides a quick way to check and see if a NetworkPrefab has a NetworkPrefab override.
-        /// Generated at runtime and OnValidate
-        /// </summary>
-        internal Dictionary<uint, NetworkPrefab> NetworkPrefabOverrideLinks = new Dictionary<uint, NetworkPrefab>();
-
-        internal Dictionary<uint, uint> OverrideToNetworkPrefab = new Dictionary<uint, uint>();
+        public NetworkPrefabs Prefabs = new NetworkPrefabs();
 
 
         /// <summary>
@@ -53,9 +42,21 @@ namespace Unity.Netcode
         public uint TickRate = 30;
 
         /// <summary>
-        /// The amount of seconds to wait for handshake to complete before timing out a client
+        /// The amount of seconds for the server to wait for the connection approval handshake to complete before the client is disconnected.
+        ///
+        /// If the timeout is reached before approval is completed the client will be disconnected.
         /// </summary>
-        [Tooltip("The amount of seconds to wait for the handshake to complete before the client times out")]
+        /// <remarks>
+        /// The period begins after the <see cref="NetworkEvent.Connect"/> is received on the server.
+        /// The period ends once the server finishes processing a <see cref="ConnectionRequestMessage"/> from the client.
+        ///
+        /// This setting is independent of any Transport-level timeouts that may be in effect. It covers the time between
+        /// the connection being established on the Transport layer, the client sending a
+        /// <see cref="ConnectionRequestMessage"/>, and the server processing that message through <see cref="ConnectionApproval"/>.
+        ///
+        /// This setting is server-side only.
+        /// </remarks>
+        [Tooltip("The amount of seconds for the server to wait for the connection approval handshake to complete before the client is disconnected")]
         public int ClientConnectionBufferTimeout = 10;
 
         /// <summary>
@@ -128,10 +129,10 @@ namespace Unity.Netcode
         public int LoadSceneTimeOut = 120;
 
         /// <summary>
-        /// The amount of time a message should be buffered for without being consumed. If it is not consumed within this time, it will be dropped.
+        /// The amount of time a message should be buffered if the asset or object needed to process it doesn't exist yet. If the asset is not added/object is not spawned within this time, it will be dropped.
         /// </summary>
-        [Tooltip("The amount of time a message should be buffered for without being consumed. If it is not consumed within this time, it will be dropped")]
-        public float MessageBufferTimeout = 20f;
+        [Tooltip("The amount of time a message should be buffered if the asset or object needed to process it doesn't exist yet. If the asset is not added/object is not spawned within this time, it will be dropped")]
+        public float SpawnTimeout = 1f;
 
         /// <summary>
         /// Whether or not to enable network logs.
@@ -139,20 +140,15 @@ namespace Unity.Netcode
         public bool EnableNetworkLogs = true;
 
         /// <summary>
-        /// Whether or not to enable Snapshot System for variable updates. Not supported in this version.
+        /// The number of RTT samples that is kept as an average for calculations
         /// </summary>
-        public bool UseSnapshotDelta { get; internal set; } = false;
-        /// <summary>
-        /// Whether or not to enable Snapshot System for spawn and despawn commands. Not supported in this version.
-        /// </summary>
-        public bool UseSnapshotSpawn { get; internal set; } = false;
-        /// <summary>
-        /// When Snapshot System spawn is enabled: max size of Snapshot Messages. Meant to fit MTU.
-        /// </summary>
-        public int SnapshotMaxSpawnUsage { get; } = 1000;
-
         public const int RttAverageSamples = 5; // number of RTT to keep an average of (plus one)
+
+        /// <summary>
+        /// The number of slots used for RTT calculations. This is the maximum amount of in-flight messages
+        /// </summary>
         public const int RttWindowSize = 64; // number of slots to use for RTT computations (max number of in-flight packets)
+
         /// <summary>
         /// Returns a base64 encoded version of the configuration
         /// </summary>
@@ -232,13 +228,15 @@ namespace Unity.Netcode
 
                 if (ForceSamePrefabs)
                 {
-                    var sortedDictionary = NetworkPrefabOverrideLinks.OrderBy(x => x.Key);
+                    var sortedDictionary = Prefabs.NetworkPrefabOverrideLinks.OrderBy(x => x.Key);
                     foreach (var sortedEntry in sortedDictionary)
 
                     {
                         writer.WriteValueSafe(sortedEntry.Key);
                     }
                 }
+
+                writer.WriteValueSafe(TickRate);
                 writer.WriteValueSafe(ConnectionApproval);
                 writer.WriteValueSafe(ForceSamePrefabs);
                 writer.WriteValueSafe(EnableSceneManagement);
@@ -264,6 +262,79 @@ namespace Unity.Netcode
         {
             return hash == GetConfig();
         }
+
+        internal void InitializePrefabs()
+        {
+            if (HasOldPrefabList())
+            {
+                MigrateOldNetworkPrefabsToNetworkPrefabsList();
+            }
+
+            Prefabs.Initialize();
+        }
+
+        #region Legacy Network Prefab List
+
+        [NonSerialized]
+        private bool m_DidWarnOldPrefabList = false;
+
+        private void WarnOldPrefabList()
+        {
+            if (!m_DidWarnOldPrefabList)
+            {
+                Debug.LogWarning("Using Legacy Network Prefab List. Consider Migrating.");
+                m_DidWarnOldPrefabList = true;
+            }
+        }
+
+        /// <summary>
+        /// Returns true if the old List&lt;NetworkPrefab&gt; serialized data is present.
+        /// </summary>
+        /// <remarks>
+        /// Internal use only to help migrate projects. <seealso cref="MigrateOldNetworkPrefabsToNetworkPrefabsList"/></remarks>
+        internal bool HasOldPrefabList()
+        {
+            return OldPrefabList?.Count > 0;
+        }
+
+        /// <summary>
+        /// Migrate the old format List&lt;NetworkPrefab&gt; prefab registration to the new NetworkPrefabsList ScriptableObject.
+        /// </summary>
+        /// <remarks>
+        /// OnAfterDeserialize cannot instantiate new objects (e.g. NetworkPrefabsList SO) since it executes in a thread, so we have to do it later.
+        /// Since NetworkConfig isn't a Unity.Object it doesn't get an Awake callback, so we have to do this in NetworkManager and expose this API.
+        /// </remarks>
+        internal NetworkPrefabsList MigrateOldNetworkPrefabsToNetworkPrefabsList()
+        {
+            if (OldPrefabList == null || OldPrefabList.Count == 0)
+            {
+                return null;
+            }
+
+            if (Prefabs == null)
+            {
+                throw new Exception("Prefabs field is null.");
+            }
+
+            Prefabs.NetworkPrefabsLists.Add(ScriptableObject.CreateInstance<NetworkPrefabsList>());
+
+            if (OldPrefabList?.Count > 0)
+            {
+                // Migrate legacy types/fields
+                foreach (var networkPrefab in OldPrefabList)
+                {
+                    Prefabs.NetworkPrefabsLists[Prefabs.NetworkPrefabsLists.Count - 1].Add(networkPrefab);
+                }
+            }
+
+            OldPrefabList = null;
+            return Prefabs.NetworkPrefabsLists[Prefabs.NetworkPrefabsLists.Count - 1];
+        }
+
+        [FormerlySerializedAs("NetworkPrefabs")]
+        [SerializeField]
+        internal List<NetworkPrefab> OldPrefabList;
+
+        #endregion
     }
 }
-

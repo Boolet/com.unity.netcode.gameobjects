@@ -1,12 +1,13 @@
 #if MULTIPLAYER_TOOLS
-using System;
 using System.Collections;
 using System.Linq;
 using NUnit.Framework;
+using Unity.Collections;
 using Unity.Multiplayer.Tools.MetricTypes;
-using Unity.Netcode.RuntimeTests.Metrics.Utility;
 using UnityEngine;
 using UnityEngine.TestTools;
+using Unity.Netcode.TestHelpers.Runtime;
+using Unity.Netcode.TestHelpers.Runtime.Metrics;
 
 namespace Unity.Netcode.RuntimeTests.Metrics
 {
@@ -17,29 +18,42 @@ namespace Unity.Netcode.RuntimeTests.Metrics
         // Header is dynamically sized due to packing, will be 2 bytes for all test messages.
         private const int k_MessageHeaderSize = 2;
 
-        protected override Action<GameObject> UpdatePlayerPrefab => _ =>
+        protected override void OnServerAndClientsCreated()
         {
             var gameObject = new GameObject(k_NewNetworkObjectName);
             m_NewNetworkPrefab = gameObject.AddComponent<NetworkObject>();
-            MultiInstanceHelpers.MakeNetworkObjectTestPrefab(m_NewNetworkPrefab);
+            NetcodeIntegrationTestHelpers.MakeNetworkObjectTestPrefab(m_NewNetworkPrefab);
 
             var networkPrefab = new NetworkPrefab { Prefab = gameObject };
-            m_ServerNetworkManager.NetworkConfig.NetworkPrefabs.Add(networkPrefab);
+            m_ServerNetworkManager.NetworkConfig.Prefabs.Add(networkPrefab);
             foreach (var client in m_ClientNetworkManagers)
             {
-                client.NetworkConfig.NetworkPrefabs.Add(networkPrefab);
+                client.NetworkConfig.Prefabs.Add(networkPrefab);
             }
-        };
+            base.OnServerAndClientsCreated();
+        }
 
         private NetworkObject SpawnNetworkObject()
         {
             // Spawn another network object so we can hide multiple.
-            var gameObject = UnityEngine.Object.Instantiate(m_NewNetworkPrefab); // new GameObject(NewNetworkObjectName);
+            var gameObject = Object.Instantiate(m_NewNetworkPrefab); // new GameObject(NewNetworkObjectName);
             var networkObject = gameObject.GetComponent<NetworkObject>();
             networkObject.NetworkManagerOwner = Server;
             networkObject.Spawn();
 
             return networkObject;
+        }
+
+        private int GetWriteSizeForOwnerChange(NetworkObject networkObject, ulong newOwner)
+        {
+            var message = new ChangeOwnershipMessage
+            {
+                NetworkObjectId = networkObject.NetworkObjectId,
+                OwnerClientId = newOwner
+            };
+            using var writer = new FastBufferWriter(1024, Allocator.Temp);
+            message.Serialize(writer, message.Version);
+            return writer.Length;
         }
 
         [UnityTest]
@@ -60,7 +74,16 @@ namespace Unity.Netcode.RuntimeTests.Metrics
             var ownershipChangeSent = metricValues.First();
             Assert.AreEqual(networkObject.NetworkObjectId, ownershipChangeSent.NetworkId.NetworkId);
             Assert.AreEqual(Server.LocalClientId, ownershipChangeSent.Connection.Id);
-            Assert.AreEqual(FastBufferWriter.GetWriteSize<ChangeOwnershipMessage>() + k_MessageHeaderSize, ownershipChangeSent.BytesCount);
+            Assert.AreEqual(0, ownershipChangeSent.BytesCount);
+
+            // The first metric is to the server(self), so its size is now correctly reported as 0.
+            // Let's check the last one instead, to have a valid value
+            ownershipChangeSent = metricValues.Last();
+            Assert.AreEqual(networkObject.NetworkObjectId, ownershipChangeSent.NetworkId.NetworkId);
+            Assert.AreEqual(Client.LocalClientId, ownershipChangeSent.Connection.Id);
+
+            var serializedLength = GetWriteSizeForOwnerChange(networkObject, 1);
+            Assert.AreEqual(serializedLength + k_MessageHeaderSize, ownershipChangeSent.BytesCount);
         }
 
         [UnityTest]
@@ -81,7 +104,9 @@ namespace Unity.Netcode.RuntimeTests.Metrics
 
             var ownershipChangeReceived = metricValues.First();
             Assert.AreEqual(networkObject.NetworkObjectId, ownershipChangeReceived.NetworkId.NetworkId);
-            Assert.AreEqual(FastBufferWriter.GetWriteSize<ChangeOwnershipMessage>(), ownershipChangeReceived.BytesCount);
+
+            var serializedLength = GetWriteSizeForOwnerChange(networkObject, 1);
+            Assert.AreEqual(serializedLength, ownershipChangeReceived.BytesCount);
         }
     }
 }

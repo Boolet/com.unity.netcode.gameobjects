@@ -1,16 +1,16 @@
+using System;
+using Unity.Collections;
+using UnityEngine;
+
 namespace Unity.Netcode
 {
     /// <summary>
     /// Two-way serializer wrapping FastBufferReader or FastBufferWriter.
-    /// 
-    /// Implemented as a ref struct for two reasons:
-    /// 1. The BufferSerializer cannot outlive the FBR/FBW it wraps or using it will cause a crash
-    /// 2. The BufferSerializer must always be passed by reference and can't be copied
     ///
-    /// Ref structs help enforce both of those rules: they can't out live the stack context in which they were
-    /// created, and they're always passed by reference no matter what.
+    /// Implemented as a ref struct to help enforce the requirement that
+    /// the BufferSerializer cannot outlive the FBR/FBW it wraps or using it will cause a crash
     ///
-    /// BufferSerializer doesn't wrapp FastBufferReader or FastBufferWriter directly because it can't.
+    /// BufferSerializer doesn't wrap FastBufferReader or FastBufferWriter directly because it can't.
     /// ref structs can't implement interfaces, and in order to be able to have two different implementations with
     /// the same interface (which allows us to avoid an "if(IsReader)" on every call), the thing directly wrapping
     /// the struct has to implement an interface. So IReaderWriter exists as the interface,
@@ -58,168 +58,526 @@ namespace Unity.Netcode
             return m_Implementation.GetFastBufferWriter();
         }
 
-        /// <summary>
-        /// Serialize an INetworkSerializable
-        /// 
-        /// Throws OverflowException if the end of the buffer has been reached.
-        /// Write buffers will grow up to the maximum allowable message size before throwing OverflowException.
-        /// </summary>
-        /// <param name="value">Value to serialize</param>
-        public void SerializeNetworkSerializable<T>(ref T value) where T : INetworkSerializable, new()
-        {
-            m_Implementation.SerializeNetworkSerializable(ref value);
-        }
 
         /// <summary>
-        /// Serialize a string.
-        ///
-        /// Note: Will ALWAYS allocate a new string when reading.
-        /// 
-        /// Throws OverflowException if the end of the buffer has been reached.
-        /// Write buffers will grow up to the maximum allowable message size before throwing OverflowException.
+        /// Read or write a string
         /// </summary>
-        /// <param name="s">Value to serialize</param>
-        /// <param name="oneByteChars">
-        /// If true, will truncate each char to one byte.
-        /// This is slower than two-byte chars, but uses less bandwidth.
-        /// </param>
-        public void SerializeValue(ref string s, bool oneByteChars = false)
-        {
-            m_Implementation.SerializeValue(ref s, oneByteChars);
-        }
+        /// <param name="s">The value to read/write</param>
+        /// <param name="oneByteChars">If true, characters will be limited to one-byte ASCII characters</param>
+        public void SerializeValue(ref string s, bool oneByteChars = false) => m_Implementation.SerializeValue(ref s, oneByteChars);
 
         /// <summary>
-        /// Serialize an array value.
-        ///
-        /// Note: Will ALWAYS allocate a new array when reading.
-        /// If you have a statically-sized array that you know is large enough, it's recommended to
-        /// serialize the size yourself and iterate serializing array members.
-        /// 
-        /// (This is because C# doesn't allow setting an array's length value, so deserializing
-        /// into an existing array of larger size would result in an array that doesn't have as many values
-        /// as its Length indicates it should.)
-        /// 
-        /// Throws OverflowException if the end of the buffer has been reached.
-        /// Write buffers will grow up to the maximum allowable message size before throwing OverflowException.
+        /// Read or write a single byte
         /// </summary>
-        /// <param name="array">Value to serialize</param>
-        public void SerializeValue<T>(ref T[] array) where T : unmanaged
-        {
-            m_Implementation.SerializeValue(ref array);
-        }
+        /// <param name="value">The value to read/write</param>
+        public void SerializeValue(ref byte value) => m_Implementation.SerializeValue(ref value);
 
         /// <summary>
-        /// Serialize a single byte
-        /// 
-        /// Throws OverflowException if the end of the buffer has been reached.
-        /// Write buffers will grow up to the maximum allowable message size before throwing OverflowException.
+        /// Read or write a primitive value (int, bool, etc)
+        /// Accepts any value that implements the given interfaces, but is not guaranteed to work correctly
+        /// on values that are not primitives.
         /// </summary>
-        /// <param name="value">Value to serialize</param>
-        public void SerializeValue(ref byte value)
-        {
-            m_Implementation.SerializeValue(ref value);
-        }
+        /// <param name="value">The value to read/write</param>
+        /// <param name="unused">An unused parameter used for enabling overload resolution based on generic constraints</param>
+        /// <typeparam name="T">The type being serialized</typeparam>
+        public void SerializeValue<T>(ref T value, FastBufferWriter.ForPrimitives unused = default) where T : unmanaged, IComparable, IConvertible, IComparable<T>, IEquatable<T> => m_Implementation.SerializeValue(ref value);
 
         /// <summary>
-        /// Serialize an unmanaged type. Supports basic value types as well as structs.
-        /// The provided type will be copied to/from the buffer as it exists in memory.
-        /// 
-        /// Throws OverflowException if the end of the buffer has been reached.
-        /// Write buffers will grow up to the maximum allowable message size before throwing OverflowException.
+        /// Read or write an array of primitive values (int, bool, etc)
+        /// Accepts any value that implements the given interfaces, but is not guaranteed to work correctly
+        /// on values that are not primitives.
         /// </summary>
-        /// <param name="value">Value to serialize</param>
-        public void SerializeValue<T>(ref T value) where T : unmanaged
-        {
-            m_Implementation.SerializeValue(ref value);
-        }
+        /// <param name="value">The values to read/write</param>
+        /// <param name="unused">An unused parameter used for enabling overload resolution based on generic constraints</param>
+        /// <typeparam name="T">The type being serialized</typeparam>
+        public void SerializeValue<T>(ref T[] value, FastBufferWriter.ForPrimitives unused = default) where T : unmanaged, IComparable, IConvertible, IComparable<T>, IEquatable<T> => m_Implementation.SerializeValue(ref value);
 
         /// <summary>
-        /// Allows faster serialization by batching bounds checking.
-        /// When you know you will be writing multiple fields back-to-back and you know the total size,
-        /// you can call PreCheck() once on the total size, and then follow it with calls to
-        /// SerializeValuePreChecked() for faster serialization. Write buffers will grow during PreCheck()
-        /// if needed.
-        /// 
-        /// PreChecked serialization operations will throw OverflowException in editor and development builds if you
-        /// go past the point you've marked using PreCheck(). In release builds, OverflowException will not be thrown
-        /// for performance reasons, since the point of using PreCheck is to avoid bounds checking in the following
-        /// operations in release builds.
-        ///
-        /// To get the correct size to check for, use FastBufferWriter.GetWriteSize(value) or
-        /// FastBufferWriter.GetWriteSize&lt;type&gt;()
+        /// Read or write an enum value
         /// </summary>
-        /// <param name="amount">Number of bytes you plan to read or write</param>
-        /// <returns>True if the read/write can proceed, false otherwise.</returns>
+        /// <param name="value">The value to read/write</param>
+        /// <param name="unused">An unused parameter used for enabling overload resolution based on generic constraints</param>
+        /// <typeparam name="T">The type being serialized</typeparam>
+        public void SerializeValue<T>(ref T value, FastBufferWriter.ForEnums unused = default) where T : unmanaged, Enum => m_Implementation.SerializeValue(ref value);
+
+        /// <summary>
+        /// Read or write an array of enum values
+        /// </summary>
+        /// <param name="value">The value to read/write</param>
+        /// <param name="unused">An unused parameter used for enabling overload resolution based on generic constraints</param>
+        /// <typeparam name="T">The type being serialized</typeparam>
+        public void SerializeValue<T>(ref T[] value, FastBufferWriter.ForEnums unused = default) where T : unmanaged, Enum => m_Implementation.SerializeValue(ref value);
+
+        /// <summary>
+        /// Read or write a struct value implementing ISerializeByMemcpy
+        /// </summary>
+        /// <param name="value">The value to read/write</param>
+        /// <param name="unused">An unused parameter used for enabling overload resolution based on generic constraints</param>
+        /// <typeparam name="T">The type being serialized</typeparam>
+        public void SerializeValue<T>(ref T value, FastBufferWriter.ForStructs unused = default) where T : unmanaged, INetworkSerializeByMemcpy => m_Implementation.SerializeValue(ref value);
+
+        /// <summary>
+        /// Read or write an array of struct values implementing ISerializeByMemcpy
+        /// </summary>
+        /// <param name="value">The values to read/write</param>
+        /// <param name="unused">An unused parameter used for enabling overload resolution based on generic constraints</param>
+        /// <typeparam name="T">The type being serialized</typeparam>
+        public void SerializeValue<T>(ref T[] value, FastBufferWriter.ForStructs unused = default) where T : unmanaged, INetworkSerializeByMemcpy => m_Implementation.SerializeValue(ref value);
+
+        /// <summary>
+        /// Read or write a struct or class value implementing INetworkSerializable
+        /// </summary>
+        /// <param name="value">The value to read/write</param>
+        /// <param name="unused">An unused parameter used for enabling overload resolution based on generic constraints</param>
+        /// <typeparam name="T">The type being serialized</typeparam>
+        public void SerializeValue<T>(ref T value, FastBufferWriter.ForNetworkSerializable unused = default) where T : INetworkSerializable, new() => m_Implementation.SerializeValue(ref value);
+
+        /// <summary>
+        /// Read or write an array of struct or class values implementing INetworkSerializable
+        /// </summary>
+        /// <param name="value">The values to read/write</param>
+        /// <param name="unused">An unused parameter used for enabling overload resolution based on generic constraints</param>
+        /// <typeparam name="T">The type being serialized</typeparam>
+        public void SerializeValue<T>(ref T[] value, FastBufferWriter.ForNetworkSerializable unused = default) where T : INetworkSerializable, new() => m_Implementation.SerializeValue(ref value);
+
+        /// <summary>
+        /// Read or write a Vector2 value
+        /// </summary>
+        /// <param name="value">The value to read/write</param>
+        public void SerializeValue(ref Vector2 value) => m_Implementation.SerializeValue(ref value);
+
+        /// <summary>
+        /// Read or write an array of Vector2 values
+        /// </summary>
+        /// <param name="value">The values to read/write</param>
+        public void SerializeValue(ref Vector2[] value) => m_Implementation.SerializeValue(ref value);
+
+        /// <summary>
+        /// Read or write a Vector3 value
+        /// </summary>
+        /// <param name="value">The value to read/write</param>
+        public void SerializeValue(ref Vector3 value) => m_Implementation.SerializeValue(ref value);
+
+        /// <summary>
+        /// Read or write an array of Vector3 values
+        /// </summary>
+        /// <param name="value">The values to read/write</param>
+        public void SerializeValue(ref Vector3[] value) => m_Implementation.SerializeValue(ref value);
+
+        /// <summary>
+        /// Read or write a Vector2Int value
+        /// </summary>
+        /// <param name="value">The value to read/write</param>
+        public void SerializeValue(ref Vector2Int value) => m_Implementation.SerializeValue(ref value);
+
+        /// <summary>
+        /// Read or write an array of Vector2Int values
+        /// </summary>
+        /// <param name="value">The values to read/write</param>
+        public void SerializeValue(ref Vector2Int[] value) => m_Implementation.SerializeValue(ref value);
+
+        /// <summary>
+        /// Read or write a Vector3Int value
+        /// </summary>
+        /// <param name="value">The value to read/write</param>
+        public void SerializeValue(ref Vector3Int value) => m_Implementation.SerializeValue(ref value);
+
+        /// <summary>
+        /// Read or write an array of Vector3Int values
+        /// </summary>
+        /// <param name="value">The values to read/write</param>
+        public void SerializeValue(ref Vector3Int[] value) => m_Implementation.SerializeValue(ref value);
+
+        /// <summary>
+        /// Read or write a Vector4 value
+        /// </summary>
+        /// <param name="value">The value to read/write</param>
+        public void SerializeValue(ref Vector4 value) => m_Implementation.SerializeValue(ref value);
+
+        /// <summary>
+        /// Read or write an array of Vector4 values
+        /// </summary>
+        /// <param name="value">The values to read/write</param>
+        public void SerializeValue(ref Vector4[] value) => m_Implementation.SerializeValue(ref value);
+
+        /// <summary>
+        /// Read or write a Quaternion value
+        /// </summary>
+        /// <param name="value">The value to read/write</param>
+        public void SerializeValue(ref Quaternion value) => m_Implementation.SerializeValue(ref value);
+
+        /// <summary>
+        /// Read or write an array of Quaternion values
+        /// </summary>
+        /// <param name="value">The values to read/write</param>
+        public void SerializeValue(ref Quaternion[] value) => m_Implementation.SerializeValue(ref value);
+
+        /// <summary>
+        /// Read or write a Color value
+        /// </summary>
+        /// <param name="value">The value to read/write</param>
+        public void SerializeValue(ref Color value) => m_Implementation.SerializeValue(ref value);
+
+        /// <summary>
+        /// Read or write an array of Color values
+        /// </summary>
+        /// <param name="value">The values to read/write</param>
+        public void SerializeValue(ref Color[] value) => m_Implementation.SerializeValue(ref value);
+
+        /// <summary>
+        /// Read or write a Color32 value
+        /// </summary>
+        /// <param name="value">The value to read/write</param>
+        public void SerializeValue(ref Color32 value) => m_Implementation.SerializeValue(ref value);
+
+        /// <summary>
+        /// Read or write an array of Color32 values
+        /// </summary>
+        /// <param name="value">The values to read/write</param>
+        public void SerializeValue(ref Color32[] value) => m_Implementation.SerializeValue(ref value);
+
+        /// <summary>
+        /// Read or write a Ray value
+        /// </summary>
+        /// <param name="value">The value to read/write</param>
+        public void SerializeValue(ref Ray value) => m_Implementation.SerializeValue(ref value);
+
+        /// <summary>
+        /// Read or write an array of Ray values
+        /// </summary>
+        /// <param name="value">The values to read/write</param>
+        public void SerializeValue(ref Ray[] value) => m_Implementation.SerializeValue(ref value);
+
+        /// <summary>
+        /// Read or write a Ray2D value
+        /// </summary>
+        /// <param name="value">The value to read/write</param>
+        public void SerializeValue(ref Ray2D value) => m_Implementation.SerializeValue(ref value);
+
+        /// <summary>
+        /// Read or write an array of Ray2D values
+        /// </summary>
+        /// <param name="value">The values to read/write</param>
+        public void SerializeValue(ref Ray2D[] value) => m_Implementation.SerializeValue(ref value);
+
+        // There are many FixedString types, but all of them share the interfaces INativeList<bool> and IUTF8Bytes.
+        // INativeList<bool> provides the Length property
+        // IUTF8Bytes provides GetUnsafePtr()
+        // Those two are necessary to serialize FixedStrings efficiently
+        // - otherwise we'd just be memcpy'ing the whole thing even if
+        // most of it isn't used.
+        /// <summary>
+        /// Read or write a FixedString value
+        /// </summary>
+        /// <typeparam name="T">The network serializable type</typeparam>
+        /// <param name="value">The values to read/write</param>
+        /// <param name="unused">An unused parameter used for enabling overload resolution of FixedStrings</param>
+        public void SerializeValue<T>(ref T value, FastBufferWriter.ForFixedStrings unused = default)
+            where T : unmanaged, INativeList<byte>, IUTF8Bytes => m_Implementation.SerializeValue(ref value);
+
+        /// <summary>
+        /// Read or write a NetworkSerializable value.
+        /// SerializeValue() is the preferred method to do this - this is provided for backward compatibility only.
+        /// </summary>
+        /// <typeparam name="T">The network serializable type</typeparam>
+        /// <param name="value">The values to read/write</param>
+        public void SerializeNetworkSerializable<T>(ref T value) where T : INetworkSerializable, new() => m_Implementation.SerializeNetworkSerializable(ref value);
+
+        /// <summary>
+        /// Performs an advance check to ensure space is available to read/write one or more values.
+        /// This provides a performance benefit for serializing multiple values using the
+        /// SerializeValuePreChecked methods. But note that the benefit is small and only likely to be
+        /// noticeable if serializing a very large number of items.
+        /// </summary>
+        /// <param name="amount"></param>
+        /// <returns></returns>
         public bool PreCheck(int amount)
         {
             return m_Implementation.PreCheck(amount);
         }
 
         /// <summary>
-        /// Serialize a string.
-        /// 
-        /// Note: Will ALWAYS allocate a new string when reading.
-        ///
-        /// Using the PreChecked versions of these functions requires calling PreCheck() ahead of time, and they should only
-        /// be called if PreCheck() returns true. This is an efficiency option, as it allows you to PreCheck() multiple
-        /// serialization operations in one function call instead of having to do bounds checking on every call.
+        /// Serialize a string, "pre-checked", which skips buffer checks.
+        /// In debug and editor builds, a check is made to ensure you've called "PreCheck" before
+        /// calling this. In release builds, calling this without calling "PreCheck" may read or write
+        /// past the end of the buffer, which will cause memory corruption and undefined behavior.
         /// </summary>
-        /// <param name="s">Value to serialize</param>
-        /// <param name="oneByteChars">
-        /// If true, will truncate each char to one byte.
-        /// This is slower than two-byte chars, but uses less bandwidth.
-        /// </param>
-        public void SerializeValuePreChecked(ref string s, bool oneByteChars = false)
-        {
-            m_Implementation.SerializeValuePreChecked(ref s, oneByteChars);
-        }
+        /// <param name="s">The value to read/write</param>
+        /// <param name="oneByteChars">If true, characters will be limited to one-byte ASCII characters</param>
+        public void SerializeValuePreChecked(ref string s, bool oneByteChars = false) => m_Implementation.SerializeValuePreChecked(ref s, oneByteChars);
 
         /// <summary>
-        /// Serialize an array value.
-        ///
-        /// Note: Will ALWAYS allocate a new array when reading.
-        /// If you have a statically-sized array that you know is large enough, it's recommended to
-        /// serialize the size yourself and iterate serializing array members.
-        /// 
-        /// (This is because C# doesn't allow setting an array's length value, so deserializing
-        /// into an existing array of larger size would result in an array that doesn't have as many values
-        /// as its Length indicates it should.)
-        ///
-        /// Using the PreChecked versions of these functions requires calling PreCheck() ahead of time, and they should only
-        /// be called if PreCheck() returns true. This is an efficiency option, as it allows you to PreCheck() multiple
-        /// serialization operations in one function call instead of having to do bounds checking on every call.
+        /// Serialize a byte, "pre-checked", which skips buffer checks.
+        /// In debug and editor builds, a check is made to ensure you've called "PreCheck" before
+        /// calling this. In release builds, calling this without calling "PreCheck" may read or write
+        /// past the end of the buffer, which will cause memory corruption and undefined behavior.
         /// </summary>
-        /// <param name="array">Value to serialize</param>
-        public void SerializeValuePreChecked<T>(ref T[] array) where T : unmanaged
-        {
-            m_Implementation.SerializeValuePreChecked(ref array);
-        }
+        /// <param name="value">The value to read/write</param>
+        public void SerializeValuePreChecked(ref byte value) => m_Implementation.SerializeValuePreChecked(ref value);
 
         /// <summary>
-        /// Serialize a single byte
-        ///
-        /// Using the PreChecked versions of these functions requires calling PreCheck() ahead of time, and they should only
-        /// be called if PreCheck() returns true. This is an efficiency option, as it allows you to PreCheck() multiple
-        /// serialization operations in one function call instead of having to do bounds checking on every call.
+        /// Serialize a primitive, "pre-checked", which skips buffer checks.
+        /// In debug and editor builds, a check is made to ensure you've called "PreCheck" before
+        /// calling this. In release builds, calling this without calling "PreCheck" may read or write
+        /// past the end of the buffer, which will cause memory corruption and undefined behavior.
         /// </summary>
-        /// <param name="value">Value to serialize</param>
-        public void SerializeValuePreChecked(ref byte value)
-        {
-            m_Implementation.SerializeValuePreChecked(ref value);
-        }
+        /// <typeparam name="T">The network serializable type</typeparam>
+        /// <param name="value">The value to read/write</param>
+        /// <param name="unused">An unused parameter used for enabling overload resolution based on generic constraints</param>
+        public void SerializeValuePreChecked<T>(ref T value, FastBufferWriter.ForPrimitives unused = default) where T : unmanaged, IComparable, IConvertible, IComparable<T>, IEquatable<T> => m_Implementation.SerializeValuePreChecked(ref value);
 
         /// <summary>
-        /// Serialize an unmanaged type. Supports basic value types as well as structs.
-        /// The provided type will be copied to/from the buffer as it exists in memory.
-        ///
-        /// Using the PreChecked versions of these functions requires calling PreCheck() ahead of time, and they should only
-        /// be called if PreCheck() returns true. This is an efficiency option, as it allows you to PreCheck() multiple
-        /// serialization operations in one function call instead of having to do bounds checking on every call.
+        /// Serialize an array of primitives, "pre-checked", which skips buffer checks.
+        /// In debug and editor builds, a check is made to ensure you've called "PreCheck" before
+        /// calling this. In release builds, calling this without calling "PreCheck" may read or write
+        /// past the end of the buffer, which will cause memory corruption and undefined behavior.
         /// </summary>
-        /// <param name="value">Value to serialize</param>
-        public void SerializeValuePreChecked<T>(ref T value) where T : unmanaged
-        {
-            m_Implementation.SerializeValuePreChecked(ref value);
-        }
+        /// <typeparam name="T">The network serializable types in an array</typeparam>
+        /// <param name="value">The values to read/write</param>
+        /// <param name="unused">An unused parameter used for enabling overload resolution of primitives</param>
+        public void SerializeValuePreChecked<T>(ref T[] value, FastBufferWriter.ForPrimitives unused = default) where T : unmanaged, IComparable, IConvertible, IComparable<T>, IEquatable<T> => m_Implementation.SerializeValuePreChecked(ref value);
+
+        /// <summary>
+        /// Serialize an enum, "pre-checked", which skips buffer checks.
+        /// In debug and editor builds, a check is made to ensure you've called "PreCheck" before
+        /// calling this. In release builds, calling this without calling "PreCheck" may read or write
+        /// past the end of the buffer, which will cause memory corruption and undefined behavior.
+        /// </summary>
+        /// <typeparam name="T">The network serializable type</typeparam>
+        /// <param name="value">The values to read/write</param>
+        /// <param name="unused">An unused parameter used for enabling overload resolution of enums</param>
+        public void SerializeValuePreChecked<T>(ref T value, FastBufferWriter.ForEnums unused = default) where T : unmanaged, Enum => m_Implementation.SerializeValuePreChecked(ref value);
+
+        /// <summary>
+        /// Serialize an array of enums, "pre-checked", which skips buffer checks.
+        /// In debug and editor builds, a check is made to ensure you've called "PreCheck" before
+        /// calling this. In release builds, calling this without calling "PreCheck" may read or write
+        /// past the end of the buffer, which will cause memory corruption and undefined behavior.
+        /// </summary>
+        /// <typeparam name="T">The network serializable types in an array</typeparam>
+        /// <param name="value">The values to read/write</param>
+        /// <param name="unused">An unused parameter used for enabling overload resolution of enums</param>
+        public void SerializeValuePreChecked<T>(ref T[] value, FastBufferWriter.ForEnums unused = default) where T : unmanaged, Enum => m_Implementation.SerializeValuePreChecked(ref value);
+
+        /// <summary>
+        /// Serialize a struct, "pre-checked", which skips buffer checks.
+        /// In debug and editor builds, a check is made to ensure you've called "PreCheck" before
+        /// calling this. In release builds, calling this without calling "PreCheck" may read or write
+        /// past the end of the buffer, which will cause memory corruption and undefined behavior.
+        /// </summary>
+        /// <typeparam name="T">The network serializable type</typeparam>
+        /// <param name="value">The values to read/write</param>
+        /// <param name="unused">An unused parameter used for enabling overload resolution of structs</param>
+        public void SerializeValuePreChecked<T>(ref T value, FastBufferWriter.ForStructs unused = default) where T : unmanaged, INetworkSerializeByMemcpy => m_Implementation.SerializeValuePreChecked(ref value);
+
+        /// <summary>
+        /// Serialize an array of structs, "pre-checked", which skips buffer checks.
+        /// In debug and editor builds, a check is made to ensure you've called "PreCheck" before
+        /// calling this. In release builds, calling this without calling "PreCheck" may read or write
+        /// past the end of the buffer, which will cause memory corruption and undefined behavior.
+        /// </summary>
+        /// <typeparam name="T">The network serializable types in an array</typeparam>
+        /// <param name="value">The values to read/write</param>
+        /// <param name="unused">An unused parameter used for enabling overload resolution of structs</param>
+        public void SerializeValuePreChecked<T>(ref T[] value, FastBufferWriter.ForStructs unused = default) where T : unmanaged, INetworkSerializeByMemcpy => m_Implementation.SerializeValuePreChecked(ref value);
+
+        /// <summary>
+        /// Serialize a Vector2, "pre-checked", which skips buffer checks.
+        /// In debug and editor builds, a check is made to ensure you've called "PreCheck" before
+        /// calling this. In release builds, calling this without calling "PreCheck" may read or write
+        /// past the end of the buffer, which will cause memory corruption and undefined behavior.
+        /// </summary>
+        /// <param name="value">The value to read/write</param>
+        public void SerializeValuePreChecked(ref Vector2 value) => m_Implementation.SerializeValuePreChecked(ref value);
+
+        /// <summary>
+        /// Serialize a Vector2 array, "pre-checked", which skips buffer checks.
+        /// In debug and editor builds, a check is made to ensure you've called "PreCheck" before
+        /// calling this. In release builds, calling this without calling "PreCheck" may read or write
+        /// past the end of the buffer, which will cause memory corruption and undefined behavior.
+        /// </summary>
+        /// <param name="value">The values to read/write</param>
+        public void SerializeValuePreChecked(ref Vector2[] value) => m_Implementation.SerializeValuePreChecked(ref value);
+
+        /// <summary>
+        /// Serialize a Vector3, "pre-checked", which skips buffer checks.
+        /// In debug and editor builds, a check is made to ensure you've called "PreCheck" before
+        /// calling this. In release builds, calling this without calling "PreCheck" may read or write
+        /// past the end of the buffer, which will cause memory corruption and undefined behavior.
+        /// </summary>
+        /// <param name="value">The value to read/write</param>
+        public void SerializeValuePreChecked(ref Vector3 value) => m_Implementation.SerializeValuePreChecked(ref value);
+
+        /// <summary>
+        /// Serialize a Vector3 array, "pre-checked", which skips buffer checks.
+        /// In debug and editor builds, a check is made to ensure you've called "PreCheck" before
+        /// calling this. In release builds, calling this without calling "PreCheck" may read or write
+        /// past the end of the buffer, which will cause memory corruption and undefined behavior.
+        /// </summary>
+        /// <param name="value">The values to read/write</param>
+        public void SerializeValuePreChecked(ref Vector3[] value) => m_Implementation.SerializeValuePreChecked(ref value);
+
+        /// <summary>
+        /// Serialize a Vector2Int, "pre-checked", which skips buffer checks.
+        /// In debug and editor builds, a check is made to ensure you've called "PreCheck" before
+        /// calling this. In release builds, calling this without calling "PreCheck" may read or write
+        /// past the end of the buffer, which will cause memory corruption and undefined behavior.
+        /// </summary>
+        /// <param name="value">The value to read/write</param>
+        public void SerializeValuePreChecked(ref Vector2Int value) => m_Implementation.SerializeValuePreChecked(ref value);
+
+        /// <summary>
+        /// Serialize a Vector2Int array, "pre-checked", which skips buffer checks.
+        /// In debug and editor builds, a check is made to ensure you've called "PreCheck" before
+        /// calling this. In release builds, calling this without calling "PreCheck" may read or write
+        /// past the end of the buffer, which will cause memory corruption and undefined behavior.
+        /// </summary>
+        /// <param name="value">The values to read/write</param>
+        public void SerializeValuePreChecked(ref Vector2Int[] value) => m_Implementation.SerializeValuePreChecked(ref value);
+
+        /// <summary>
+        /// Serialize a Vector3Int, "pre-checked", which skips buffer checks.
+        /// In debug and editor builds, a check is made to ensure you've called "PreCheck" before
+        /// calling this. In release builds, calling this without calling "PreCheck" may read or write
+        /// past the end of the buffer, which will cause memory corruption and undefined behavior.
+        /// </summary>
+        /// <param name="value">The value to read/write</param>
+        public void SerializeValuePreChecked(ref Vector3Int value) => m_Implementation.SerializeValuePreChecked(ref value);
+
+        /// <summary>
+        /// Serialize a Vector3Int array, "pre-checked", which skips buffer checks.
+        /// In debug and editor builds, a check is made to ensure you've called "PreCheck" before
+        /// calling this. In release builds, calling this without calling "PreCheck" may read or write
+        /// past the end of the buffer, which will cause memory corruption and undefined behavior.
+        /// </summary>
+        /// <param name="value">The value to read/write</param>
+        public void SerializeValuePreChecked(ref Vector3Int[] value) => m_Implementation.SerializeValuePreChecked(ref value);
+
+        /// <summary>
+        /// Serialize a Vector4, "pre-checked", which skips buffer checks.
+        /// In debug and editor builds, a check is made to ensure you've called "PreCheck" before
+        /// calling this. In release builds, calling this without calling "PreCheck" may read or write
+        /// past the end of the buffer, which will cause memory corruption and undefined behavior.
+        /// </summary>
+        /// <param name="value">The value to read/write</param>
+        public void SerializeValuePreChecked(ref Vector4 value) => m_Implementation.SerializeValuePreChecked(ref value);
+
+        /// <summary>
+        /// Serialize a Vector4Array, "pre-checked", which skips buffer checks.
+        /// In debug and editor builds, a check is made to ensure you've called "PreCheck" before
+        /// calling this. In release builds, calling this without calling "PreCheck" may read or write
+        /// past the end of the buffer, which will cause memory corruption and undefined behavior.
+        /// </summary>
+        /// <param name="value">The value to read/write</param>
+        public void SerializeValuePreChecked(ref Vector4[] value) => m_Implementation.SerializeValuePreChecked(ref value);
+
+        /// <summary>
+        /// Serialize a Quaternion, "pre-checked", which skips buffer checks.
+        /// In debug and editor builds, a check is made to ensure you've called "PreCheck" before
+        /// calling this. In release builds, calling this without calling "PreCheck" may read or write
+        /// past the end of the buffer, which will cause memory corruption and undefined behavior.
+        /// </summary>
+        /// <param name="value">The value to read/write</param>
+        public void SerializeValuePreChecked(ref Quaternion value) => m_Implementation.SerializeValuePreChecked(ref value);
+
+        /// <summary>
+        /// Serialize a Quaternion array, "pre-checked", which skips buffer checks.
+        /// In debug and editor builds, a check is made to ensure you've called "PreCheck" before
+        /// calling this. In release builds, calling this without calling "PreCheck" may read or write
+        /// past the end of the buffer, which will cause memory corruption and undefined behavior.
+        /// </summary>
+        /// <param name="value">The value to read/write</param>
+        public void SerializeValuePreChecked(ref Quaternion[] value) => m_Implementation.SerializeValuePreChecked(ref value);
+
+        /// <summary>
+        /// Serialize a Color, "pre-checked", which skips buffer checks.
+        /// In debug and editor builds, a check is made to ensure you've called "PreCheck" before
+        /// calling this. In release builds, calling this without calling "PreCheck" may read or write
+        /// past the end of the buffer, which will cause memory corruption and undefined behavior.
+        /// </summary>
+        /// <param name="value">The value to read/write</param>
+        public void SerializeValuePreChecked(ref Color value) => m_Implementation.SerializeValuePreChecked(ref value);
+
+        /// <summary>
+        /// Serialize a Color array, "pre-checked", which skips buffer checks.
+        /// In debug and editor builds, a check is made to ensure you've called "PreCheck" before
+        /// calling this. In release builds, calling this without calling "PreCheck" may read or write
+        /// past the end of the buffer, which will cause memory corruption and undefined behavior.
+        /// </summary>
+        /// <param name="value">The value to read/write</param>
+        public void SerializeValuePreChecked(ref Color[] value) => m_Implementation.SerializeValuePreChecked(ref value);
+
+        /// <summary>
+        /// Serialize a Color32, "pre-checked", which skips buffer checks.
+        /// In debug and editor builds, a check is made to ensure you've called "PreCheck" before
+        /// calling this. In release builds, calling this without calling "PreCheck" may read or write
+        /// past the end of the buffer, which will cause memory corruption and undefined behavior.
+        /// </summary>
+        /// <param name="value">The value to read/write</param>
+        public void SerializeValuePreChecked(ref Color32 value) => m_Implementation.SerializeValuePreChecked(ref value);
+
+        /// <summary>
+        /// Serialize a Color32 array, "pre-checked", which skips buffer checks.
+        /// In debug and editor builds, a check is made to ensure you've called "PreCheck" before
+        /// calling this. In release builds, calling this without calling "PreCheck" may read or write
+        /// past the end of the buffer, which will cause memory corruption and undefined behavior.
+        /// </summary>
+        /// <param name="value">The value to read/write</param>
+        public void SerializeValuePreChecked(ref Color32[] value) => m_Implementation.SerializeValuePreChecked(ref value);
+
+        /// <summary>
+        /// Serialize a Ray, "pre-checked", which skips buffer checks.
+        /// In debug and editor builds, a check is made to ensure you've called "PreCheck" before
+        /// calling this. In release builds, calling this without calling "PreCheck" may read or write
+        /// past the end of the buffer, which will cause memory corruption and undefined behavior.
+        /// </summary>
+        /// <param name="value">The value to read/write</param>
+        public void SerializeValuePreChecked(ref Ray value) => m_Implementation.SerializeValuePreChecked(ref value);
+
+        /// <summary>
+        /// Serialize a Ray array, "pre-checked", which skips buffer checks.
+        /// In debug and editor builds, a check is made to ensure you've called "PreCheck" before
+        /// calling this. In release builds, calling this without calling "PreCheck" may read or write
+        /// past the end of the buffer, which will cause memory corruption and undefined behavior.
+        /// </summary>
+        /// <param name="value">The value to read/write</param>
+        public void SerializeValuePreChecked(ref Ray[] value) => m_Implementation.SerializeValuePreChecked(ref value);
+
+        /// <summary>
+        /// Serialize a Ray2D, "pre-checked", which skips buffer checks.
+        /// In debug and editor builds, a check is made to ensure you've called "PreCheck" before
+        /// calling this. In release builds, calling this without calling "PreCheck" may read or write
+        /// past the end of the buffer, which will cause memory corruption and undefined behavior.
+        /// </summary>
+        /// <param name="value">The value to read/write</param>
+        public void SerializeValuePreChecked(ref Ray2D value) => m_Implementation.SerializeValuePreChecked(ref value);
+
+        /// <summary>
+        /// Serialize a Ray2D array, "pre-checked", which skips buffer checks.
+        /// In debug and editor builds, a check is made to ensure you've called "PreCheck" before
+        /// calling this. In release builds, calling this without calling "PreCheck" may read or write
+        /// past the end of the buffer, which will cause memory corruption and undefined behavior.
+        /// </summary>
+        /// <param name="value">The value to read/write</param>
+        public void SerializeValuePreChecked(ref Ray2D[] value) => m_Implementation.SerializeValuePreChecked(ref value);
+
+        // There are many FixedString types, but all of them share the interfaces INativeList<bool> and IUTF8Bytes.
+        // INativeList<bool> provides the Length property
+        // IUTF8Bytes provides GetUnsafePtr()
+        // Those two are necessary to serialize FixedStrings efficiently
+        // - otherwise we'd just be memcpying the whole thing even if
+        // most of it isn't used.
+
+        /// <summary>
+        /// Serialize a FixedString, "pre-checked", which skips buffer checks.
+        /// In debug and editor builds, a check is made to ensure you've called "PreCheck" before
+        /// calling this. In release builds, calling this without calling "PreCheck" may read or write
+        /// past the end of the buffer, which will cause memory corruption and undefined behavior.
+        /// </summary>
+        /// <typeparam name="T">The network serializable type</typeparam>
+        /// <param name="value">The value to read/write</param>
+        /// <param name="unused">An unused parameter that can be used for enabling overload resolution for fixed strings</param>
+        public void SerializeValuePreChecked<T>(ref T value, FastBufferWriter.ForFixedStrings unused = default)
+            where T : unmanaged, INativeList<byte>, IUTF8Bytes => m_Implementation.SerializeValuePreChecked(ref value);
     }
 }

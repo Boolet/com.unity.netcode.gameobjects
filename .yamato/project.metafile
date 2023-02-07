@@ -1,4 +1,5 @@
 validation_editor: 2020.3
+mobile_validation_editor: 2021.3
 
 # Platforms that will be tested. The first entry in this array will also
 # be used for validation
@@ -34,25 +35,49 @@ projects:
   - name: testproject
     path: testproject
     validate: true
+    publish: true
+    has_tests: true
     # Packages within a project that will be tested
     packages:
       - name: com.unity.netcode.gameobjects
         path: com.unity.netcode.gameobjects
-      - name: com.unity.netcode.adapter.utp
-        path: com.unity.netcode.adapter.utp
     test_editors:
-      - 2021.1
-      - 2021.2
       - 2020.3
+      - 2021.3
+      - 2022.2
       - trunk
-    multiprocess_test_editors:
-      - 2021.1
-      - 2021.2
+  - name: minimalproject
+    path: minimalproject
+    validate: false
+    publish: false
+    has_tests: false
+    packages:
+      - name: com.unity.netcode.gameobjects
+        path: com.unity.netcode.gameobjects
+    test_editors:
       - 2020.3
-      - 2022.1
-#  - name: testproject-tools-integration
-#    path: testproject-tools-integration
-#    validate: false
-#    test_editors:
-#      - 2021.2
-#      - trunk
+  - name: testproject-tools-integration
+    path: testproject-tools-integration
+    validate: false
+    publish: false
+    has_tests: true
+    test_editors:
+      - 2021.3
+      - 2022.2
+      - trunk
+
+# Package dependencies
+dependencies: 
+  - name: com.unity.transport
+    version: 2.0.0-pre.2
+    test_editors:
+      - 2022.2
+      - trunk
+
+# Scripting backends used by Standalone Playmode Tests
+scripting_backends: 
+  - mono
+  - il2cpp
+
+# Images with build-tools installed required for Standalone Tests - IL2CPP
+win_il2cpp_test_image: dots-player/windows10:latest

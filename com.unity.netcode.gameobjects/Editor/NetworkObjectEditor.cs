@@ -4,6 +4,9 @@ using UnityEditor;
 
 namespace Unity.Netcode.Editor
 {
+    /// <summary>
+    /// The <see cref="CustomEditor"/> for <see cref="NetworkObject"/>
+    /// </summary>
     [CustomEditor(typeof(NetworkObject), true)]
     [CanEditMultipleObjects]
     public class NetworkObjectEditor : UnityEditor.Editor
@@ -11,6 +14,8 @@ namespace Unity.Netcode.Editor
         private bool m_Initialized;
         private NetworkObject m_NetworkObject;
         private bool m_ShowObservers;
+
+        private static readonly string[] k_HiddenFields = { "m_Script" };
 
         private void Initialize()
         {
@@ -23,6 +28,7 @@ namespace Unity.Netcode.Editor
             m_NetworkObject = (NetworkObject)target;
         }
 
+        /// <inheritdoc/>
         public override void OnInspectorGUI()
         {
             Initialize();
@@ -91,7 +97,11 @@ namespace Unity.Netcode.Editor
             }
             else
             {
-                base.OnInspectorGUI();
+                EditorGUI.BeginChangeCheck();
+                serializedObject.UpdateIfRequiredOrScript();
+                DrawPropertiesExcluding(serializedObject, k_HiddenFields);
+                serializedObject.ApplyModifiedProperties();
+                EditorGUI.EndChangeCheck();
 
                 var guiEnabled = GUI.enabled;
                 GUI.enabled = false;
@@ -99,6 +109,33 @@ namespace Unity.Netcode.Editor
                 EditorGUILayout.TextField(nameof(NetworkObject.NetworkManager), m_NetworkObject.NetworkManager == null ? "null" : m_NetworkObject.NetworkManager.gameObject.name);
                 GUI.enabled = guiEnabled;
             }
+        }
+
+        // Saved for use in OnDestroy
+        private GameObject m_GameObject;
+
+        /// <summary>
+        /// Invoked once when a NetworkObject component is
+        /// displayed in the inspector view.
+        /// </summary>
+        private void OnEnable()
+        {
+            // We set the GameObject upon being enabled because when the
+            // NetworkObject component is removed (i.e. when OnDestroy is invoked)
+            // it is no longer valid/available.
+            m_GameObject = (target as NetworkObject).gameObject;
+        }
+
+        /// <summary>
+        /// Invoked once when a NetworkObject component is
+        /// no longer displayed in the inspector view.
+        /// </summary>
+        private void OnDestroy()
+        {
+            // Since this is also invoked when a NetworkObject component is removed
+            // from a GameObject, we go ahead and check for a NetworkObject when
+            // this custom editor is destroyed.
+            NetworkBehaviourEditor.CheckForNetworkObject(m_GameObject, true);
         }
     }
 }

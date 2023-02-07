@@ -6,6 +6,7 @@ using System.Text;
 using Mono.Cecil;
 using Mono.Cecil.Cil;
 using Mono.Cecil.Rocks;
+using Unity.Collections;
 using Unity.CompilationPipeline.Common.Diagnostics;
 using Unity.CompilationPipeline.Common.ILPostProcessing;
 using UnityEngine;
@@ -14,6 +15,10 @@ namespace Unity.Netcode.Editor.CodeGen
 {
     internal static class CodeGenHelpers
     {
+        public const string DotnetModuleName = "netstandard.dll";
+        public const string UnityModuleName = "UnityEngine.CoreModule.dll";
+        public const string NetcodeModuleName = "Unity.Netcode.Runtime.dll";
+
         public const string RuntimeAssemblyName = "Unity.Netcode.Runtime";
 
         public static readonly string NetworkBehaviour_FullName = typeof(NetworkBehaviour).FullName;
@@ -22,7 +27,13 @@ namespace Unity.Netcode.Editor.CodeGen
         public static readonly string ClientRpcAttribute_FullName = typeof(ClientRpcAttribute).FullName;
         public static readonly string ServerRpcParams_FullName = typeof(ServerRpcParams).FullName;
         public static readonly string ClientRpcParams_FullName = typeof(ClientRpcParams).FullName;
+        public static readonly string ClientRpcSendParams_FullName = typeof(ClientRpcSendParams).FullName;
+        public static readonly string ClientRpcReceiveParams_FullName = typeof(ClientRpcReceiveParams).FullName;
+        public static readonly string ServerRpcSendParams_FullName = typeof(ServerRpcSendParams).FullName;
+        public static readonly string ServerRpcReceiveParams_FullName = typeof(ServerRpcReceiveParams).FullName;
         public static readonly string INetworkSerializable_FullName = typeof(INetworkSerializable).FullName;
+        public static readonly string INetworkSerializeByMemcpy_FullName = typeof(INetworkSerializeByMemcpy).FullName;
+        public static readonly string IUTF8Bytes_FullName = typeof(IUTF8Bytes).FullName;
         public static readonly string UnityColor_FullName = typeof(Color).FullName;
         public static readonly string UnityColor32_FullName = typeof(Color32).FullName;
         public static readonly string UnityVector2_FullName = typeof(Vector2).FullName;
@@ -73,6 +84,35 @@ namespace Unity.Netcode.Editor.CodeGen
             return false;
         }
 
+        public static string FullNameWithGenericParameters(this TypeReference typeReference, GenericParameter[] contextGenericParameters, TypeReference[] contextGenericParameterTypes)
+        {
+            var name = typeReference.FullName;
+            if (typeReference.HasGenericParameters)
+            {
+                name += "<";
+                for (var i = 0; i < typeReference.Resolve().GenericParameters.Count; ++i)
+                {
+                    if (i != 0)
+                    {
+                        name += ", ";
+                    }
+
+                    for (var j = 0; j < contextGenericParameters.Length; ++j)
+                    {
+                        if (typeReference.GenericParameters[i].FullName == contextGenericParameters[i].FullName)
+                        {
+                            name += contextGenericParameterTypes[i].FullName;
+                            break;
+                        }
+                    }
+                }
+
+                name += ">";
+            }
+
+            return name;
+        }
+
         public static bool HasInterface(this TypeReference typeReference, string interfaceTypeFullName)
         {
             if (typeReference.IsArray)
@@ -83,6 +123,19 @@ namespace Unity.Netcode.Editor.CodeGen
             try
             {
                 var typeDef = typeReference.Resolve();
+                // Note: this won't catch generics correctly.
+                //
+                //     class Foo<T>: IInterface<T> {}
+                //     class Bar: Foo<int> {}
+                //
+                // Bar.HasInterface(IInterface<int>) -> returns false even though it should be true.
+                //
+                // This can be fixed (see GetAllFieldsAndResolveGenerics() in NetworkBehaviourILPP to understand how)
+                // but right now we don't need that to work so it's left alone to reduce complexity
+                if (typeDef.BaseType.HasInterface(interfaceTypeFullName))
+                {
+                    return true;
+                }
                 var typeFaces = typeDef.Interfaces;
                 return typeFaces.Any(iface => iface.InterfaceType.FullName == interfaceTypeFullName);
             }
@@ -343,6 +396,75 @@ namespace Unity.Netcode.Editor.CodeGen
             assemblyResolver.AddAssemblyDefinitionBeingOperatedOn(assemblyDefinition);
 
             return assemblyDefinition;
+        }
+
+        private static void SearchForBaseModulesRecursive(AssemblyDefinition assemblyDefinition, PostProcessorAssemblyResolver assemblyResolver, ref ModuleDefinition unityModule, ref ModuleDefinition netcodeModule, HashSet<string> visited)
+        {
+
+            foreach (var module in assemblyDefinition.Modules)
+            {
+                if (module == null)
+                {
+                    continue;
+                }
+
+                if (unityModule != null && netcodeModule != null)
+                {
+                    return;
+                }
+
+                if (unityModule == null && module.Name == UnityModuleName)
+                {
+                    unityModule = module;
+                    continue;
+                }
+
+                if (netcodeModule == null && module.Name == NetcodeModuleName)
+                {
+                    netcodeModule = module;
+                    continue;
+                }
+            }
+            if (unityModule != null && netcodeModule != null)
+            {
+                return;
+            }
+
+            foreach (var assemblyNameReference in assemblyDefinition.MainModule.AssemblyReferences)
+            {
+                if (assemblyNameReference == null)
+                {
+                    continue;
+                }
+                if (visited.Contains(assemblyNameReference.Name))
+                {
+                    continue;
+                }
+
+                visited.Add(assemblyNameReference.Name);
+
+                var assembly = assemblyResolver.Resolve(assemblyNameReference);
+                if (assembly == null)
+                {
+                    continue;
+                }
+                SearchForBaseModulesRecursive(assembly, assemblyResolver, ref unityModule, ref netcodeModule, visited);
+
+                if (unityModule != null && netcodeModule != null)
+                {
+                    return;
+                }
+            }
+        }
+
+        public static (ModuleDefinition UnityModule, ModuleDefinition NetcodeModule) FindBaseModules(AssemblyDefinition assemblyDefinition, PostProcessorAssemblyResolver assemblyResolver)
+        {
+            ModuleDefinition unityModule = null;
+            ModuleDefinition netcodeModule = null;
+            var visited = new HashSet<string>();
+            SearchForBaseModulesRecursive(assemblyDefinition, assemblyResolver, ref unityModule, ref netcodeModule, visited);
+
+            return (unityModule, netcodeModule);
         }
     }
 }

@@ -5,22 +5,17 @@
         "Unity.Netcode.Runtime",
         "Unity.Netcode.Components",
         "Unity.Collections",
-        "UnityEngine.TestRunner",
         "Unity.Multiplayer.MetricTypes",
         "Unity.Multiplayer.NetStats",
         "Unity.Multiplayer.Tools.MetricTypes",
         "Unity.Multiplayer.Tools.NetStats",
-        "Unity.Netcode.Adapter.UTP",
-        "ClientNetworkTransform"
+        "Unity.Networking.Transport",
+        "ClientNetworkTransform",
+        "Unity.Netcode.TestHelpers.Runtime"
     ],
-    "includePlatforms": [],
-    "excludePlatforms": [],
-    "allowUnsafeCode": false,
-    "overrideReferences": true,
-    "precompiledReferences": [
-        "nunit.framework.dll"
+    "optionalUnityReferences": [
+        "TestAssemblies"
     ],
-    "autoReferenced": false,
     "defineConstraints": [
         "UNITY_INCLUDE_TESTS"
     ],
@@ -36,15 +31,19 @@
             "define": "UNITY_UNET_PRESENT"
         },
         {
-            "name": "com.unity.netcode.adapter.utp",
-            "expression": "",
-            "define": "UTP_ADAPTER"        
+            "name": "com.unity.multiplayer.tools",
+            "expression": "1.0.0-pre.7",
+            "define": "MULTIPLAYER_TOOLS_1_0_0_PRE_7"
         },
         {
-            "name": "com.unity.multiplayer.tools",
-            "expression": "1.0.0-pre.4",
-            "define": "MULTIPLAYER_TOOLS_1_0_0_PRE_4"
+            "name": "com.unity.modules.physics",
+            "expression": "",
+            "define": "COM_UNITY_MODULES_PHYSICS"
+        },
+        {
+            "name": "com.unity.transport",
+            "expression": "2.0.0-exp",
+            "define": "UTP_TRANSPORT_2_0_ABOVE"
         }
-    ],
-    "noEngineReferences": false
+    ]
 }

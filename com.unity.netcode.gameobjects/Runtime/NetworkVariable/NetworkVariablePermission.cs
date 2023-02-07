@@ -1,18 +1,32 @@
 namespace Unity.Netcode
 {
     /// <summary>
-    /// Permission type
+    /// The permission types for reading a var
     /// </summary>
     public enum NetworkVariableReadPermission
     {
         /// <summary>
-        /// Everyone
+        /// Everyone can read
         /// </summary>
         Everyone,
-
         /// <summary>
-        /// Owner-ownly
+        /// Only the owner and the server can read
         /// </summary>
-        OwnerOnly,
+        Owner,
+    }
+
+    /// <summary>
+    ///  The permission types for writing a var
+    /// </summary>
+    public enum NetworkVariableWritePermission
+    {
+        /// <summary>
+        /// Only the server can write
+        /// </summary>
+        Server,
+        /// <summary>
+        /// Only the owner can write
+        /// </summary>
+        Owner
     }
 }
